@@ -1318,3 +1318,13 @@ Deno.test("tester pass 10: 'oil vinegar' is the Oil-Vinegar dressing (a hyphen i
   assertEquals(p.form.lines[0].notes, []);
 });
 
+Deno.test("tester pass 10: 'french fries extra crispy' answers the fries question and keeps the instruction", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "can i add some fries extra crispy", [{ kind: "add_line", item_span: "fries", qty: 1, option_spans: ["extra crispy"] }]);
+  assertStringIncludes(o.reply, "What kind of fries?");
+  o = say(o.form, "french fries extra crispy please", [{ kind: "answer_option", value_span: "french fries extra crispy" }]);
+  assertEquals(o.form.lines[0].item_id, IDS.fries, o.reply);
+  assertStringIncludes(o.reply, "extra crispy");
+});
+

@@ -6,14 +6,8 @@ import { GROUP_PROMPTS, groupPrompt, orList, sortSizes, T, title, type Voice } f
 import { contentWords, singular, words, sameWord } from "./normalize.ts";
 
 export type Ack =
-  | { kind: "line_added"; line: PricedLine }
-  | { kind: "line_changed"; line: PricedLine }
-  | { kind: "line_removed"; name: string }
-  | { kind: "fulfillment"; value: Fulfillment }
-  | { kind: "address"; text: string }
-  | { kind: "tip"; cents: number }
-  | { kind: "noted"; notes: string[] }
-  | { kind: "line_progress"; name: string; picks: string[] }
+  | { kind: "line_added"; line: PricedLine } | { kind: "line_changed"; line: PricedLine } | { kind: "line_removed"; name: string } | { kind: "fulfillment"; value: Fulfillment }
+  | { kind: "address"; text: string } | { kind: "tip"; cents: number } | { kind: "noted"; notes: string[] } | { kind: "line_progress"; name: string; picks: string[] }
   | { kind: "pending"; items: Array<{ qty: number; span: string }> };
 
 export type Decline = { code: DeclineCode | "dropped_line" | "address_to_pickup" | "tip_zero" | "checkout_failed"; span?: string };

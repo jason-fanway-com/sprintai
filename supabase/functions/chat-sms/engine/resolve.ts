@@ -268,6 +268,10 @@ export function bindLine(line: Line, menu: Menu): void {
       const n = isDigits(a) ? (cands[parseInt(a, 10) - 1] ? [cands[parseInt(a, 10) - 1]] : []) : narrow(cands, a, menu);
       const r = n.length <= 1 ? resolveSpan(a, menu) : null;
       if (n.length >= 1 && n.length < cands.length) cands = n; else if (n.length === 0 && r?.kind === "item") cands = [r.id]; // named an item the list missed
+      else if (n.length === 0) { // "french fries extra crispy": the words that name a kind narrow; the rest ride along as the customer's instruction
+        const ws = contentWords(a), hit = ws.filter((w) => { const k = narrow(cands, w, menu).length; return k >= 1 && k < cands.length; }), n2 = hit.length ? narrow(cands, hit.join(" "), menu) : [];
+        if (n2.length === 1) { cands = n2; const rest = ws.filter((w) => !hit.includes(w) && narrow(n2, w, menu).length === 0); if (rest.length) line.held.push(rest.join(" ")); }
+      }
       if (r?.kind === "item" && cands.length === 1 && cands[0] === r.id && contentWords(menu.items.get(r.id)!.display_name).every((iw) => isDigits(iw) || words(a).some((w) => sameWord(iw, w)))) line.span = a; // the answer IS the item's whole name ("italian hoagie", not "boneless"): the first span's leftover words ("chicken" of "chicken cheesestake sandwich") were never options
     }
     line.answers = [];
