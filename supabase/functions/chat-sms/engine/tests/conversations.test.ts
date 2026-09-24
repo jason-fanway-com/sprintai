@@ -9,7 +9,7 @@ import { turn } from "../turn.ts";
 import { narrow } from "../resolve.ts";
 import { closedAnswer } from "../vocab.ts";
 import { totals } from "../price.ts";
-import { words } from "../normalize.ts";
+import { words, closestWord } from "../normalize.ts";
 
 const menu = fixtureMenu();
 const addr = (text: string) => ({ kind: "answer", field: "address", value: { text, formatted: text, validated: true, zone_ok: true } } as Move);
@@ -1183,3 +1183,31 @@ Deno.test("a menu question about something we don't have gets a plain no", () =>
   const o2 = say(o.form, "whats my total");
   assertStringIncludes(o2.reply, "Your order is empty so far.");
 });
+
+Deno.test("tester pass 6: typo whose only rivals are its own plural; 'piece' is filler; a numeric pick after which-one; one answer said twice", () => {
+  assertEquals(closestWord("cheesestake", ["cheesesteak", "cheesesteaks", "chicken", "cheese"]), "cheesesteak");
+  assertEquals(closestWord("cheesestake", ["cheesesteak", "cheesecake"]), null); // two different words: nothing
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "a cheeseburger and a bacon cheeseburger", [{ kind: "add_line", item_span: "cheeseburger", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "bacon cheeseburger", qty: 1, option_spans: [] }]);
+  o = say(o.form, "cancel one of the burgers", [{ kind: "remove_line", ref: { span: "burgers" } }]);
+  assertStringIncludes(o.reply, "Which one do you mean?");
+  o = say(o.form, "cancel the first one", [{ kind: "remove_line", ref: { span: "1" } }]);
+  assertEquals(o.form.lines.map((l) => l.item_id), [IDS.baconCheeseburger], o.reply);
+  let p = say(f, "some fries and a house salad", [{ kind: "add_line", item_span: "fries", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "house salad", qty: 1, option_spans: [] }]);
+  p = say(p.form, "cheese fries for both of em", [{ kind: "answer_option", value_span: "cheese fries" }, { kind: "answer_option", value_span: "cheese fries" }]);
+  assertEquals(p.form.lines.filter((l) => l.item_id === IDS.cheeseFries).length, 1, p.reply);
+});
+
+Deno.test("tester pass 6: a whole item name the list missed is the line (talk-only turn); its own words replace the first span; talk about menu items is dropped", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "chicken salad", [{ kind: "add_line", item_span: "chicken salad", qty: 1, option_spans: [] }]);
+  assertEquals(o.form.lines[0].status.kind, "ambiguous", o.reply);
+  o = say(o.form, "yo i said house salad. you have that or nah?", [{ kind: "talk", text: "We have house salad, let me check on that for you." }]);
+  assertEquals(o.form.lines[0].item_id, IDS.houseSalad, o.reply);
+  assertEquals(o.form.lines[0].modifiers, [], o.reply); // "chicken" from the abandoned span never became the paid Grilled Chicken add-on
+  assert(!o.reply.includes("We have"), o.reply);
+  assert(!o.reply.includes("Did you also want"), o.reply);
+});
+

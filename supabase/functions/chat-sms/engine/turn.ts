@@ -10,7 +10,7 @@ import { priceLine, totals, unitCents } from "./price.ts";
 import { render, type Ack, type Decline, type Info, type Question, type ReplyPlan } from "./render.ts";
 import type { Voice } from "./templates.ts";
 import { itemsInCategory } from "./menu.ts";
-import { contentWords, leadingCount, splitList, words, findWordRun, isWordSubset, STOPWORDS } from "./normalize.ts";
+import { contentWords, leadingCount, splitList, words, findWordRun, isWordSubset, sameWord, STOPWORDS } from "./normalize.ts";
 
 export interface TurnInput {
   form: OrderForm;
@@ -53,7 +53,9 @@ export function turn(input: TurnInput): TurnOutput {
   // 1. cross-read: two readers of the same message
   const askedSpans = new Set(form0.omissions.map((o) => o.span));
   const lineQuestionOpen = !!(form0.open && "line_id" in form0.open);
-  const batch = normalizeMoveBatch(input.moves, lineQuestionOpen), rec = reconcile(input.message, batch, menu, askedSpans);
+  const batch = normalizeMoveBatch(input.moves, lineQuestionOpen).filter((m) => { // the model never talks about menu items: "We have chicken cheesesteak, but..." is the engine's to say or not
+    const bad = m.kind === "talk" && scan(m.text, menu).hits.length > 0; if (bad) ledger.push({ turn: t, event: "talk_dropped_menu_words", data: { text: (m as { text: string }).text } }); return !bad;
+  }), rec = reconcile(input.message, batch, menu, askedSpans);
   ledger.push({ turn: t, event: "model_moves", data: { moves: batch } }); // what the model said, before any of our reading of it
   for (const r of rec.rejected) ledger.push({ turn: t, event: "rejected_span_not_in_message", data: r });
 
@@ -99,6 +101,7 @@ export function turn(input: TurnInput): TurnOutput {
       parts = kinds.filter((k) => !words(k).filter((w) => !shared.includes(w)).every((w) => mw.includes(w))).map((k) => ({ span: k, qty: 1 }));
     } else for (const o of rec.omissions) if (one(o.span) && !parts.some((p) => narrow(cands, p.span, menu)[0] === narrow(cands, o.span, menu)[0])) parts.push({ span: o.span, qty: o.qty }); // a kind the model left out ("one plain, ...")
     const pos = (span: string) => { const i = mw.indexOf(words(span).find((w) => !STOPWORDS.has(w)) ?? ""); return i < 0 ? 999 : i; }; // lines in the order the customer said them
+    parts = parts.reduce<typeof parts>((acc, p) => { const same = acc.find((q) => narrow(cands, q.span, menu)[0] === narrow(cands, p.span, menu)[0]); if (same) same.qty += p.qty; else acc.push({ ...p }); return acc; }, []); // "cheesesteak sandwich for both of em": one answer said twice is one answer, not two lines
     parts.sort((x, y) => pos(x.span) - pos(y.span));
     if (parts.length >= 2 || (parts.length === 1 && focus.qty > 1 && parts[0].qty === focus.qty)) {
       const aboutFocus = (m: Move) => (m.kind === "add_line" && lineMatchesSpan(focus, m.item_span, menu)) || ((m.kind === "change_line" || m.kind === "remove_line") && ("line_id" in m.ref ? m.ref.line_id === focus.line_id : "span" in m.ref && lineMatchesSpan(focus, m.ref.span, menu)));
@@ -113,9 +116,11 @@ export function turn(input: TurnInput): TurnOutput {
   if (focus && !splitFocus) {
     const keep: typeof rec.omissions = [];
     for (const om of rec.omissions) {
-      if (spanAnswersLine(focus, om.span, menu) && !rec.accepted.some((m) => m.kind === "answer_option" && words(m.value_span).join(" ") === om.span)) {
+      // "yo i said chicken cheesesteak sandwich" against a list that missed it: a whole item name sharing a word with the line is the line, not a second order
+      const names = (focus.status.kind === "ambiguous" || focus.status.kind === "unresolved") && !batch.some((m) => m.kind === "add_line") && om.item_ids.length === 1 && !(focus.status.kind === "ambiguous" && focus.status.candidates.includes(om.item_ids[0])) && contentWords(om.span).some((w) => contentWords(focus.span).some((f) => sameWord(w, f)));
+      if ((names || spanAnswersLine(focus, om.span, menu)) && !rec.accepted.some((m) => m.kind === "answer_option" && words(m.value_span).join(" ") === om.span)) {
         rec.accepted.push({ kind: "answer_option", value_span: om.span });
-        ledger.push({ turn: t, event: "uncovered_word_answers_question", data: { span: om.span } });
+        ledger.push({ turn: t, event: names ? "mention_names_the_line" : "uncovered_word_answers_question", data: { span: om.span } });
       } else keep.push(om);
     }
     rec.omissions.length = 0; rec.omissions.push(...keep);

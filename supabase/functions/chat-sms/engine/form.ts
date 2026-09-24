@@ -179,6 +179,7 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: LineMatc
     if ("line_id" in ref) return live.some((l) => l.line_id === ref.line_id) ? [ref.line_id] : [];
     if ("ordinal" in ref) { const l = live[ref.ordinal - 1]; return l ? [l.line_id] : []; }
     if ("last" in ref) return live.length === 1 ? [live[0].line_id] : (live.length ? [live[live.length - 1].line_id] : []);
+    if (isDigits(ref.span)) { const i = parseInt(ref.span, 10) - 1, pick = form.open?.kind === "line_ref" ? form.open.candidates[i] : live[i]?.line_id; return pick !== undefined && live.some((l) => l.line_id === pick) ? [pick] : []; } // "cancel the first one" against the list we just showed
     const overlap = live.filter((l) => lineSpanMatcher(l, ref.span)), named = overlap.filter((l) => lineSpanMatcher.named?.(l, ref.span));
     const hitLines = named.length > 0 ? named : overlap; // "cheesesteak salad" names the salad line; it only overlaps the pending "cheesesteak" line
     const hits = hitLines.map((l) => l.line_id);

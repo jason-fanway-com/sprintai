@@ -260,8 +260,9 @@ export function bindLine(line: Line, menu: Menu): void {
     for (const a of line.answers ?? []) {
       if (cands.length === 1) break;
       const n = isDigits(a) ? (cands[parseInt(a, 10) - 1] ? [cands[parseInt(a, 10) - 1]] : []) : narrow(cands, a, menu);
-      if (n.length >= 1 && n.length < cands.length) cands = n;
-      else if (n.length === 0) { const r = resolveSpan(a, menu); if (r.kind === "item") cands = [r.id]; } // named an item the list missed
+      const r = n.length <= 1 ? resolveSpan(a, menu) : null;
+      if (n.length >= 1 && n.length < cands.length) cands = n; else if (n.length === 0 && r?.kind === "item") cands = [r.id]; // named an item the list missed
+      if (r?.kind === "item" && cands.length === 1 && cands[0] === r.id && contentWords(menu.items.get(r.id)!.display_name).every((iw) => isDigits(iw) || words(a).some((w) => sameWord(iw, w)))) line.span = a; // the answer IS the item's whole name ("italian hoagie", not "boneless"): the first span's leftover words ("chicken" of "chicken cheesestake sandwich") were never options
     }
     line.answers = [];
     // one option span naming several toppings ("half pepperoni half mushroom", "pepperoni and
@@ -357,7 +358,7 @@ function segmentTopics(h: string, cands: string[], menu: Menu): string[] {
 
 /** Does a customer span refer to this line? Used for "remove the knots", "make the pizza 2". */
 /** The span names the line's item outright: every word is one of the item's words ("burger" ~ "cheeseburger"). */
-export function lineNamedBySpan(line: Line, span: string, menu: Menu): boolean { const item = line.item_id ? menu.items.get(line.item_id) : null, sw = words(span); return !!item && sw.length > 0 && sw.every((w) => item.words.some((iw) => iw === w || (w.length >= 4 && iw.endsWith(w)))); }
+export function lineNamedBySpan(line: Line, span: string, menu: Menu): boolean { const item = line.item_id ? menu.items.get(line.item_id) : null, sw = words(span); return !!item && sw.length > 0 && sw.every((w) => item.words.some((iw) => sameWord(iw, w) || (singular(w).length >= 4 && iw.endsWith(singular(w))))); } // "burgers" ~ "cheeseburger"
 export function lineMatchesSpan(line: Line, span: string, menu: Menu): boolean {
   const sw = words(span);
   if (sw.length === 0) return false;
