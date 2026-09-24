@@ -27,6 +27,9 @@ export function resolveSpan(span: string, menu: Menu): SpanResolution {
   // "hawiaan", "peperoni": a word the menu does not know, one edit from one it does, is that word (before anything else reads the span)
   const fixed = sw.map((w) => menu.vocab.has(w) || STOPWORDS.has(w) || SIZE_WORDS.has(w) ? w : closestWord(w, menu.vocab) ?? w);
   if (fixed.some((w, i) => w !== sw[i])) return resolveSpan(fixed.join(" "), menu);
+  // "bacon cheese burger": two adjacent words the menu writes as one ("cheeseburger") are that word
+  const joined = sw.flatMap((w, i) => i > 0 && menu.vocab.has(sw[i - 1] + w) ? [] : [i + 1 < sw.length && menu.vocab.has(w + sw[i + 1]) ? w + sw[i + 1] : w]);
+  if (joined.length < sw.length) return resolveSpan(joined.join(" "), menu);
   const swSing = sw.map(singular), content = contentWords(span);
   // the whole span IS a category word ("pie", "pizza"): the category, not whichever items the compiler tagged with it
   for (const t of menu.categoryTerms) if (sameWords(t.wordsSing, content.map(singular))) { const r = pick(new Set(itemsInCategory(menu, t.target_id).map((i) => i.id))); if (r) return r; }

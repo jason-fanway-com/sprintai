@@ -65,7 +65,8 @@ export function turn(input: TurnInput): TurnOutput {
     // "bagel with plain cream cheese": the longer term names the item
     const sw = words(m.item_span), ow = m.option_spans.flatMap((o) => words(o)), fits = hits.filter((x) => !usedHits.has(x) && x.item_ids.length === 1 && x.termWords.length > sw.length && sw.every((w) => x.termWords.includes(w)));
     const h = fits.find((x) => ow.length > 0 && ow.every((w) => x.termWords.includes(w))) ?? fits[0]; // "taco pizza"+["small"] -> the "small taco pizza" mention
-    if (!h) return m;
+    const standsAlone = (from: number): boolean => { const i = findWordRun(mw, sw, from); return i >= 0 && ((h && (i + sw.length <= h.start || i >= h.end)) || standsAlone(i + 1)); };
+    if (!h || standsAlone(0)) return m; // "a cheesesteak, chicken cheesesteak salad": the bare cheesesteak is its own item
     usedHits.add(h);
     // an option is part of the longer name only if the customer did not ALSO say it elsewhere ("chicken bacon ranch ... and bacon")
     const options = m.option_spans.filter((o) => findWordRun(mw, words(o), h.end) >= 0 || (h.start > 0 && findWordRun(mw.slice(0, h.start), words(o)) >= 0) || !words(o).every((w) => h.termWords.includes(w)));

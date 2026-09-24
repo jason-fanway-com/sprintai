@@ -42,17 +42,10 @@ export function escalate(form: OrderForm, menu: Menu): string | null {
   switch (q.kind) {
     case "line_unresolved": case "line_ambiguous": case "line_picks": case "line_slot": {
       const idx = form.lines.findIndex((l) => l.line_id === q.line_id);
-      if (idx >= 0) { const [gone] = form.lines.splice(idx, 1); return `dropped_line:${gone.span}`; }
-      return null;
+      return idx >= 0 ? `dropped_line:${form.lines.splice(idx, 1)[0].span}` : null;
     }
-    case "omission": {
-      for (const o of form.omissions) if (q.spans.includes(o.span)) o.declined = true;
-      return `omission_dropped:${q.spans.join(", ")}`;
-    }
-    case "address": {
-      form.fulfillment = "pickup"; form.address = null; form.tip = null;
-      return "address_to_pickup";
-    }
+    case "omission": { for (const o of form.omissions) if (q.spans.includes(o.span)) o.declined = true; return `omission_dropped:${q.spans.join(", ")}`; }
+    case "address": { form.fulfillment = "pickup"; form.address = null; form.tip = null; return "address_to_pickup"; }
     case "tip": { form.tip = { kind: "cents", value: 0 }; return "tip_zero"; }
     case "fulfillment": { if (!menu.shop.delivery_enabled) { form.fulfillment = "pickup"; return "fulfillment_pickup"; } return null; }
     default: return null;

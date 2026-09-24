@@ -48,7 +48,7 @@ export function sameWord(a: string, b: string): boolean { const [s, l] = a.lengt
 
 
 export const SIZE_WORDS = new Set(["small", "medium", "large", "xlarge", "personal", "sheet", "cup", "bowl", "pint", "quart", "half", "whole", "regular"]);
-export const STOPWORDS = new Set(["a", "an", "the", "of", "with", "and", "please", "some", "order", "side", "one", "two", "three", "for", "me", "get", "want", "like", "id", "i", "can", "have", "to", "my", "on", "it", "that", "just", "thanks", "thank", "you", "pls", "plz", "size", "sized", "inch", "inches"]);
+export const STOPWORDS = new Set(["a", "an", "the", "of", "with", "and", "please", "some", "order", "side", "one", "two", "three", "for", "me", "get", "want", "like", "id", "i", "can", "have", "to", "my", "on", "it", "that", "just", "thanks", "thank", "you", "pls", "plz", "size", "sized", "inch", "inches", "thing", "things", "stuff", "kinda"]);
 /** The words of a span that could name an item: no stopwords, no size words. */
 export function contentWords(text: string): string[] { return words(text).filter((w) => !STOPWORDS.has(w) && !SIZE_WORDS.has(w)); }
 
@@ -100,7 +100,7 @@ export function talkClaimsTime(raw: string): boolean { return /\b(\d+|an?|half a
 
 /** "hawiaan" -> "hawaiian": the unique menu word within one edit (two for longer words), or null. Pure string distance, no guessing. */
 export function closestWord(w: string, vocab: Iterable<string>): string | null {
-  if (w.length < 5 || /\d/.test(w)) return null;
+  if (w.length < 4 || /\d/.test(w)) return null;
   const budget = w.length >= 7 ? 2 : 1, hits: Array<[number, string]> = [];
   for (const v of vocab) { if (v.startsWith(w)) return null; if (v !== w && Math.abs(v.length - w.length) <= budget) { const d = editDistance(w, v, budget); if (d <= budget) hits.push([d, v]); } } // a stem ("parm") is not a typo
   hits.sort((x, y) => x[0] - y[0]);

@@ -32,9 +32,7 @@ function picked(line: Line, item: MenuItem): Array<{ name: string; delta_cents: 
   ]);
 }
 
-export function unitCents(line: Line, item: MenuItem): number {
-  return picked(line, item).reduce((s, c) => s + c.delta_cents, item.base_cents);
-}
+export function unitCents(line: Line, item: MenuItem): number { return picked(line, item).reduce((s, c) => s + c.delta_cents, item.base_cents); }
 
 export function priceLine(line: Line, menu: Menu): PricedLine | null {
   if (line.status.kind !== "complete" || !line.item_id) return null;

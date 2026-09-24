@@ -1090,6 +1090,24 @@ Deno.test("tester pass 4: 'parm' is a stem, never a typo; '3 pizzas, one peppero
   assertEquals(c.form.lines[0].status.kind, "complete");
 });
 
+Deno.test("tester pass 5: a bare 'cheesesteak' beside 'chicken cheesesteak salad' stays its own item; fillers, 4-letter typos and split compounds resolve", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  const a = say(f, "a cheesesteak, chicken cheesesteak salad and garlic knots", [
+    { kind: "add_line", item_span: "cheesesteak", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "chicken cheesesteak salad", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] },
+  ]);
+  assertEquals(a.form.lines.filter((l) => l.item_id === "cssal").length, 1, a.reply);
+  assertEquals(a.form.lines[0].item_id, IDS.cheesesteak);
+  const b = say(f, "a bacon cheeseburger thing", [{ kind: "add_line", item_span: "bacon cheeseburger thing", qty: 1, option_spans: [] }]);
+  assertEquals(b.form.lines[0].item_id, IDS.baconCheeseburger, b.reply);
+  const c = say(f, "a peperoni piza", [{ kind: "add_line", item_span: "peperoni piza", qty: 1, option_spans: [] }]);
+  assertStringIncludes(c.reply, "What size Pepperoni Pizza");
+  const d = say(f, "a bacon cheese burger", [{ kind: "add_line", item_span: "bacon cheese burger", qty: 1, option_spans: [] }]);
+  assertEquals(d.form.lines[0].item_id, IDS.baconCheeseburger, d.reply);
+  assert(!menu.itemTerms.some((t) => t.target_id === "louk" && t.words.length < 3), "Topping/Sauce/Filling is one phrase, never the terms 'sauce' and 'filling'");
+  assert(menu.itemTerms.some((t) => t.target_id === "cssal" && t.words.join(" ") === "cheesesteak salad"));
+});
+
 Deno.test("'20 wings' against 10-piece rows is two orders; the kind is still asked", () => {
   let f = newForm("vitos", "test-v1");
   f = say(f, "pickup").form;

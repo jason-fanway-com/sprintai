@@ -173,9 +173,11 @@ export function buildMenu(input: {
       categoryTerms.push({ words: w, wordsSing: w.map(singular), target_id: e.target_id, target_type: "category" });
     }
   }
-  // an item's own display name is always a term, so a lexicon gap never makes it unorderable (NJB's Chicken Salad Sandwich had none)
+  // an item's own display name is always a term, so a lexicon gap never makes it unorderable (NJB's Chicken Salad Sandwich had none);
+  // "Cheesesteak / Chicken Cheesesteak Salad" names two things ("cheesesteak salad", "chicken cheesesteak salad"), never one five-word run; "Topping/Sauce/Filling" is one phrase
   const have = new Set(itemTerms.map((t) => `${t.target_id}|${t.words.join(" ")}`));
-  for (const it of items.values()) if (it.orderable && it.words.length > 0 && !have.has(`${it.id}|${it.words.join(" ")}`)) itemTerms.push({ words: it.words, wordsSing: it.words.map(singular), target_id: it.id, target_type: "item" });
+  const names = (it: MenuItem): string[][] => { const p = it.display_name.split(" / ").map((x) => words(x)).filter((w) => w.length > 0); if (p.length < 2) return [it.words]; const last = p[p.length - 1], k = last.lastIndexOf(p[0][p[0].length - 1]); return p.map((w, i) => i === p.length - 1 ? w : [...w, ...last.slice(k >= 0 ? k + 1 : 1)]); };
+  for (const it of items.values()) if (it.orderable) for (const w of names(it)) if (w.length > 0 && !have.has(`${it.id}|${w.join(" ")}`)) itemTerms.push({ words: w, wordsSing: w.map(singular), target_id: it.id, target_type: "item" });
   itemTerms.sort((a, b) => b.words.length - a.words.length);
   categoryTerms.sort((a, b) => b.words.length - a.words.length);
 

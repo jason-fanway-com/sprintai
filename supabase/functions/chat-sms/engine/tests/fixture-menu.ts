@@ -87,6 +87,8 @@ export const RAW_ITEMS: RawMenuItem[] = [
   item("lbBowl", "Bowl Lobster Bisque Soup", "Soups", 799, { display_name: "Bowl Lobster Bisque Soup" }),
   item("chparmE", "Chicken Parmesan", "Entrees", 1795),
   item("gcs", "Grilled Chicken", "Salads", 1295, { display_name: "Grilled Chicken Salad" }),
+  item("cssal", "Cheesesteak / Chicken Cheesesteak", "Salads", 1295, { display_name: "Cheesesteak / Chicken Cheesesteak Salad" }),
+  item("louk", "Your Way Loukoumades - Additional Topping/Sauce/Filling", "Desserts", 150, { display_name: "Small Your Way Loukoumades - Additional Topping/Sauce/Filling" }),
   item("bgcs", "Buffalo Grilled Chicken", "Salads", 1395, { display_name: "Buffalo Grilled Chicken Salad" }),
   item(IDS.greekSalad, "Greek Salad", "Salads", 899, {}, [
     { group_id: "gsDress", slot_key: "dressing", kind: "slot", ask_mode: "ask", prompt_template: "dressing.ask",
@@ -128,7 +130,7 @@ export const RAW_LEXICON: LexiconEntry[] = [
   ["plain", IDS.cheesePizzaS], ["plain", IDS.cheesePizzaM], ["plain", IDS.cheesePizzaL],
   ["margherita", IDS.margheritaS], ["margherita", IDS.margheritaL], ["margherita pizza", IDS.margheritaS], ["margherita pizza", IDS.margheritaL],
   ["house salad", IDS.houseSalad], ["house", IDS.houseSalad], ["greek salad", IDS.greekSalad],
-  ["grilled chicken salad", "gcs"], ["grilled chicken", "gcs"], ["buffalo grilled chicken salad", "bgcs"], ["buffalo grilled chicken", "bgcs"],
+  ["grilled chicken salad", "gcs"], ["grilled chicken", "gcs"], ["chicken cheesesteak salad", "cssal"], ["cheesesteak salad", "cssal"], ["buffalo grilled chicken salad", "bgcs"], ["buffalo grilled chicken", "bgcs"],
   ["cheesesteak", IDS.cheesesteak], ["cheese steak", IDS.cheesesteak], ["sandwich", IDS.cheesesteak], ["sandwiches", IDS.cheesesteak],
   ["chicken", "chq"], ["chicken quesadilla", "chq"], ["quesadilla", "chq"],
   ["meatball", "nonas"], ["meatballs", "nonas"], ["nonas meatballs", "nonas"],
