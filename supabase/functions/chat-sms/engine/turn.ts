@@ -71,24 +71,14 @@ export function turn(input: TurnInput): TurnOutput {
   };
   const open = form0.open;
   const focus = open && "line_id" in open ? form0.lines.find((l) => l.line_id === open.line_id) : undefined;
-  // a rejected add whose item word was invented ("pizza") but whose option words are the customer's
-  // own answers to the open line question keeps those answers
-  if (focus) {
-    for (const r of rec.rejected) {
-      if (r.move.kind !== "add_line") continue;
-      const mw = words(input.message);
-      // the item span's own verbatim words ("plain" out of "plain pizza") count too
-      const itemVerbatim = words(r.move.item_span).filter((w) => mw.includes(w)).join(" ");
-      const candidates = [...(itemVerbatim ? [itemVerbatim] : []), ...r.move.option_spans];
-      for (const o of candidates) {
-        const ow = words(o);
-        if (ow.length && ow.every((w) => mw.includes(w)) && spanAnswersLine(focus, o, menu)) {
-          rec.accepted.push({ kind: "answer_option", value_span: o });
-          ledger.push({ turn: t, event: "salvaged_answer_from_rejected_add", data: { span: o } });
-          break;
-        }
-      }
-    }
+  // a rejected add whose item word was invented ("pizza") but whose option words, or the item span's own
+  // verbatim words ("plain" out of "plain pizza"), answer the open line question keeps that answer
+  const mw = words(input.message);
+  if (focus) for (const r of rec.rejected) {
+    if (r.move.kind !== "add_line") continue;
+    const itemVerbatim = words(r.move.item_span).filter((w) => mw.includes(w)).join(" ");
+    const o = [itemVerbatim, ...r.move.option_spans].find((o) => words(o).length > 0 && words(o).every((w) => mw.includes(w)) && spanAnswersLine(focus, o, menu));
+    if (o) { rec.accepted.push({ kind: "answer_option", value_span: o }); ledger.push({ turn: t, event: "salvaged_answer_from_rejected_add", data: { span: o } }); }
   }
   // uncovered customer words that answer the open line question are answers, not omissions
   if (focus) {

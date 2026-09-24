@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from e2e import get, say, cart_for  # noqa: E402  (loads secrets)
 
 SHOPS = {"vitos": "e0000000-0000-0000-0000-000000000001", "njb": "b0000000-0000-0000-0000-000000000001", "zio": "2cba7b51-211c-4437-8910-1af4dcc03498"}
-ADDRESSES = ["5620 Cetronia Rd Allentown pa 18106", "3300 Hamilton Blvd, Allentown, PA 18103", "1 Wilshire Rd Allentown 18104", "2222 w union st allentown"]
+ADDRESSES = ["5620 Cetronia Rd Allentown pa 18106", "3300 Hamilton Blvd, Allentown, PA 18103", "2222 w union st allentown", "1901 hamilton st allentown pa"]
 OR_KEY = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("SPRINTAI_CHAT_OPENROUTER_API_KEY")
 TESTER_MODEL = "anthropic/claude-haiku-4.5"
 

@@ -860,6 +860,27 @@ Deno.test("tester pass 1: 'chicken wings' is the wings category, never the 'Chic
   assertEquals(o.form.lines[0].status.kind, "ambiguous");
 });
 
+Deno.test("tester pass 1: one answer fills a gyro's duplicate Beef/Chicken slots; no second question, no loop", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "a gyro sandwich", [{ kind: "add_line", item_span: "gyro sandwich", qty: 1, option_spans: [] }]);
+  assertEquals(o.form.open?.kind, "line_slot");
+  o = say(o.form, "beef gyro sandwich please", [{ kind: "answer_option", value_span: "beef gyro sandwich please" }]);
+  assertEquals(o.form.lines[0].status.kind, "complete", o.reply);
+  assertEquals(o.form.lines[0].choices, { gyroA: "gA-beef", gyroB: "gB-beef" });
+  assert(!o.reply.includes("Beef or Chicken") && !o.reply.includes("beef or chicken"), o.reply);
+});
+
+Deno.test("tester pass 1: answering a kind question with an item the list missed takes that item", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "a burger", [{ kind: "add_line", item_span: "burger", qty: 1, option_spans: [] }]);
+  assertStringIncludes(o.reply, "What kind of burger");
+  o = say(o.form, "bacon cheeseburger", [{ kind: "answer_option", value_span: "bacon cheeseburger" }]);
+  assertEquals(o.form.lines[0].item_id, IDS.baconCheeseburger);
+  assert(!o.reply.includes("couldn't find") && !o.reply.includes("didn't follow"), o.reply);
+});
+
 Deno.test("'20 wings' against 10-piece rows is two orders; the kind is still asked", () => {
   let f = newForm("vitos", "test-v1");
   f = say(f, "pickup").form;

@@ -181,13 +181,19 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true)
     line.notes.push(`no ${text}`);
     return false;
   }
-  // 1. a slot we are currently asking about, restricted to its candidates
-  for (const g of item.groups) {
-    if (g.kind !== "slot") continue;
-    const within = line.slot_candidates[g.id];
-    const m = matchChoice(text, g, within);
-    if (m.kind === "one") { line.choices[g.id] = m.choice_id; delete line.slot_candidates[g.id]; return true; }
-    if (m.kind === "many") { line.slot_candidates[g.id] = m.choice_ids; return true; }
+  // 1. slots: unfilled ones first, and every unfilled slot the answer fits ("beef" fills both of a gyro's
+  // duplicate Beef-or-Chicken slots); only then may a filled slot be changed ("make it chicken")
+  const slots = item.groups.filter((g) => g.kind === "slot");
+  let filled = false;
+  for (const g of slots.filter((g) => !line.choices[g.id])) {
+    const m = matchChoice(text, g, line.slot_candidates[g.id]);
+    if (m.kind === "one") { line.choices[g.id] = m.choice_id; delete line.slot_candidates[g.id]; filled = true; }
+    else if (m.kind === "many" && !filled) { line.slot_candidates[g.id] = m.choice_ids; return true; }
+  }
+  if (filled) return true;
+  for (const g of slots.filter((g) => line.choices[g.id])) {
+    const m = matchChoice(text, g);
+    if (m.kind === "one") { line.choices[g.id] = m.choice_id; return true; }
   }
   // 2. a modifier
   for (const g of item.groups) {
@@ -248,6 +254,7 @@ export function bindLine(line: Line, menu: Menu): void {
       if (cands.length === 1) break;
       const n = isDigits(a) ? (cands[parseInt(a, 10) - 1] ? [cands[parseInt(a, 10) - 1]] : []) : narrow(cands, a, menu);
       if (n.length >= 1 && n.length < cands.length) cands = n;
+      else if (n.length === 0) { const r = resolveSpan(a, menu); if (r.kind === "item") cands = [r.id]; } // named an item the list missed
     }
     line.answers = [];
     // one option span naming several toppings ("half pepperoni half mushroom", "pepperoni and
