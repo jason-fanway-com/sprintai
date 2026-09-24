@@ -466,3 +466,17 @@ against a shop's live compiled menu with no model call. 127 tests; core 1,984 li
 and landed. Data for the lexicon compiler, not the engine: squashed one-word rows ("buffalochicken-large16inch"), slash names read
 as one run, size-suffixed duplicates.
 
+**2026-09-24, tester pass 6 (v635) and fixes (v636).** Twenty of twenty landed, but one conversation took eleven turns to land
+because of a chain: "chicken cheesestake sandwich" was not corrected (the typo tied with its own plural "cheesesteaks"; a winner
+whose only rivals are its plural now wins), the span fell to the "sandwich" category and asked which of six hoagies, and the
+customer's "yo i said chicken cheesesteak sandwich" came back from the model as talk only, so the cross-read's exact mention was
+filed as a possible omission and the which-one loop repeated (a whole item name that shares a word with the pending line is now
+that line, on a talk-only turn too). When the customer gave up and picked the Italian Hoagie, the abandoned span's "chicken" was
+applied as the hoagie's paid Chicken add-on (an answer that is an item's whole name now replaces the span, so leftover words of a
+span that never named the item are not options). The model's talk in that loop ("Let me check on that for you", "I see the order
+shows chicken cheesesteak but that's not one of our sandwich options") is gone at the class level: talk that contains any menu
+term is dropped, along with "let me", "I'll", "I see", "you ordered", "all set". Two more: "cheesesteak sandwich for both of em"
+became two Cheesesteak Sandwich lines (split parts naming the same item merge into one answer); "cancel the first one" against the
+list we had just shown said "I don't see 1" (a numeric ref picks from that list); "chicken fingers 5 piece with fries" could not be
+found ("piece" is filler). Deploy v636; 129 tests; core under 2,000; all pass-6 shapes replayed live and landed. Pass cost: $0.33.
+
