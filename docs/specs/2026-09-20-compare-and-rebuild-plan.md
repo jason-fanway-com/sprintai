@@ -493,3 +493,14 @@ message is the size wanted; a stale removal is silent). Twelve wing flavors for 
 name (several disjoint options now ask which; a list of a slot's options is a closed answer). 132 tests; core under 2,000;
 every shape replayed live. Pass cost: $0.29.
 
+**2026-09-24, tester pass 8 (v639) and fixes (v640–v642).** Nineteen of twenty landed, all prices right, but two kitchen-ticket
+defects hid inside landed conversations. "3 turkey hoagies" then "one white, one rye, one wheat" (and "two white one rye",
+"white, white, rye") produced three white hoagies: counted options for the asked slot on a multi-quantity line now split the line
+one per option, read from the message itself because the model sends this shape three different ways (one string; "qty 2" plus a
+second add it cannot quote; nothing). "2 chicken parm sandwiches and a cheesesteak sandwich" beside "scratch that" lost the 2
+(adds next to a removal of the asked-about line were being reclassified as answers to it; they stay adds), and the model then
+pointed "white bread for both chicken parms" at the cheesesteak (the words name the line; the pointer yields). Data, not engine:
+"what chicken options you got?" listed three Onions pizzas (lexicon tags "chicken" on them) and "just the chicken" bought the
+$12.49 Chicken row; "buffalo flavor" is not a wing flavor at Vito's. 134 tests; core under 2,000; every shape replayed live.
+Pass cost: $0.36. Passes 5–8 together: about $1.30 of model spend for twenty-odd engine classes fixed.
+

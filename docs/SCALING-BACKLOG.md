@@ -73,7 +73,9 @@ output shape, so fix the compiler and recompile (on the PO's GO), then delete th
    name; these rows only bloat the scan and the egress.
 4. **Bare generic terms on specific items.** `chicken` → the quesadilla; `sandwich` → one
    cheesesteak. A word that names a category must be a category term or nothing.
-5. **Items with no term at all** (NJB "Chicken Salad Sandwich" had none before the engine began
+5. **Category words tagged on unrelated rows.** `chicken` on the three Onions pizzas: "what chicken options you got?"
+   listed them. A term must name the row or be dropped.
+6. **Items with no term at all** (NJB "Chicken Salad Sandwich" had none before the engine began
    adding the display name itself). Every orderable item must carry at least its display name.
 
 Acceptance: `deno run -A scripts/engine/probe.ts --shop <id> "<span>"` on the Air shows the same
