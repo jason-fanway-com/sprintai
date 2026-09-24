@@ -448,3 +448,21 @@ typo; 5+ letters; two edits only from 7); "3 thin sicilians. one pepperoni, one 
 longest contained option wins); a gyro's duplicate slots printed "(Chicken, House Balsamic, Chicken)" (read once); talk said "see
 your total at checkout" (no talk about totals or checkout). Turn latency that night was the model service (many 10–30 s turns),
 not the engine. 124 tests; core under 2,000.
+
+**2026-09-24, tester pass 5 (v632) and fixes (v633–v635).** Twenty conversations, nineteen landed; the four flagged ones were four
+classes, none of them phrasing. "Cheesesteak / Chicken Cheesesteak Salad" compiled into one five-word term that swallowed the
+bare "cheesesteak" next to it (a slash display name now compiles as its alternatives, "cheesesteak salad" and "chicken cheesesteak
+salad"; the compiler's own slash-as-one-run lexicon rows are dropped at load; "Topping/Sauce/Filling" without spaces stays one
+phrase); "taco piza" could not be found (four-letter typos now correct on one edit); "bacon cheese burger" could not be found (two
+adjacent words an item NAME writes as one are that word, but only a name: the squashed lexicon row "buffalochicken" briefly turned
+"buffalo chicken cheesesteak" into the pizza, caught by the live replay); "buffalo chicken cheesesteak things" (thing/things/stuff
+are filler). The salad replay then showed three more: a bare "ranch" or "chicken" while another line's question was open went to
+the model and came back as a guess ("Did you want ranch on one of your items?"); now the whole message naming an option of exactly
+one waiting line's unfilled required slot answers that line (never a paid add-on: the stromboli's Chicken add-on is what made the
+live case ambiguous), the reply says "Ranch for the Cheesesteak / Chicken Cheesesteak Salad.", and talk containing a question mark
+is dropped outright (the engine asks). A removal naming the salad outright asked "which one" against the pending "cheesesteak" line
+(a ref that names a line's item outright wins over lines it merely overlaps). New tool: `scripts/engine/probe.ts` resolves spans
+against a shop's live compiled menu with no model call. 127 tests; core 1,984 lines. All four pass-5 shapes replayed live on v635
+and landed. Data for the lexicon compiler, not the engine: squashed one-word rows ("buffalochicken-large16inch"), slash names read
+as one run, size-suffixed duplicates.
+
