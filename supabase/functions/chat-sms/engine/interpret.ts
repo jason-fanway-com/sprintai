@@ -67,6 +67,7 @@ Examples (context -> customer -> moves):
 - "whats in my order" -> control show_cart
 - "asdf" -> control unclear
 - "what does that mean?" (after we said something odd) -> talk value "Sorry about that, that was a note I attached by mistake. Nothing changes on your order."
+- "hot sauce. actually scratch the soup, just the pizza" (we asked the roll's sauce) -> answer_option value_span "hot sauce" AND remove_line ref span "soup"
 - "thanks!" -> talk value "You're welcome!"
 - "you're terrible at this" -> talk value "Sorry, I'm not getting it right. Tell me the item and I'll get it in."`;
 

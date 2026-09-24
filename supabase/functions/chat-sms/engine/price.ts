@@ -26,13 +26,10 @@ export interface Totals {
 
 /** Every choice the line carries that its item's groups can price: slot picks first, then modifiers. */
 function picked(line: Line, item: MenuItem): Array<{ name: string; delta_cents: number; modifier: boolean }> {
-  const out: Array<{ name: string; delta_cents: number; modifier: boolean }> = [];
-  for (const g of item.groups) {
-    const chosen = line.choices[g.id];
-    if (chosen) { const c = g.choices.find((x) => x.id === chosen); if (c) out.push({ ...c, modifier: false }); }
-    for (const modId of line.modifiers) { const c = g.choices.find((x) => x.id === modId); if (c) out.push({ ...c, modifier: true }); }
-  }
-  return out;
+  return item.groups.flatMap((g) => [
+    ...g.choices.filter((c) => c.id === line.choices[g.id]).map((c) => ({ ...c, modifier: false })),
+    ...line.modifiers.flatMap((id) => g.choices.filter((c) => c.id === id)).map((c) => ({ ...c, modifier: true })),
+  ]);
 }
 
 export function unitCents(line: Line, item: MenuItem): number {

@@ -9,7 +9,7 @@ import { priceLine, totals, unitCents } from "./price.ts";
 import { render, type Ack, type Decline, type Info, type Question, type ReplyPlan } from "./render.ts";
 import type { Voice } from "./templates.ts";
 import { itemsInCategory } from "./menu.ts";
-import { contentWords, leadingCount, splitList, words, findWordRun } from "./normalize.ts";
+import { contentWords, leadingCount, splitList, words, findWordRun, isWordSubset } from "./normalize.ts";
 
 export interface TurnInput {
   form: OrderForm;
@@ -57,13 +57,15 @@ export function turn(input: TurnInput): TurnOutput {
 
   // 2. a new-item move that really answers the open line question becomes an answer
   const moves: Move[] = [];
-  const hits = scan(input.message, menu).hits; const mw = words(input.message);
+  const hits = scan(input.message, menu).hits; const mw = words(input.message); const usedHits = new Set<unknown>();
   const upgradeSpan = (m: Move & { kind: "add_line" }): Move & { kind: "add_line" } => {
     // "bagel" + ["plain cream cheese"] when the message contains the unique term
     // "bagel with plain cream cheese": the longer term names the item
-    const sw = words(m.item_span);
-    const h = hits.find((x) => x.item_ids.length === 1 && x.termWords.length > sw.length && sw.every((w) => x.termWords.includes(w)));
+    const sw = words(m.item_span), ow = m.option_spans.flatMap((o) => words(o));
+    const fits = hits.filter((x) => !usedHits.has(x) && x.item_ids.length === 1 && x.termWords.length > sw.length && sw.every((w) => x.termWords.includes(w)));
+    const h = fits.find((x) => ow.length > 0 && ow.every((w) => x.termWords.includes(w))) ?? fits[0]; // "taco pizza"+["small"] -> the "small taco pizza" mention
     if (!h) return m;
+    usedHits.add(h);
     // an option is part of the longer name only if the customer did not ALSO say it elsewhere ("chicken bacon ranch ... and bacon")
     const options = m.option_spans.filter((o) => findWordRun(mw, words(o), h.end) >= 0 || (h.start > 0 && findWordRun(mw.slice(0, h.start), words(o)) >= 0) || !words(o).every((w) => h.termWords.includes(w)));
     ledger.push({ turn: t, event: "span_upgraded", data: { from: m.item_span, to: h.termWords.join(" ") } });
@@ -203,7 +205,9 @@ export function turn(input: TurnInput): TurnOutput {
   // 5. omissions: an item the second reader saw and the first did not act on. In a conversation-only message a lone uncounted word ("my house") is not an order; a multi-word name or a counted mention is.
   const remarkOnly = moves.length > 0 && moves.every((m) => m.kind === "talk" || m.kind === "ask_menu" || m.kind === "control");
   const strong = (om: { span: string; qty: number }) => om.qty > 1 || contentWords(om.span).length >= 2;
+  const refSpans = moves.flatMap((m) => (m.kind === "remove_line" || m.kind === "change_line") && "span" in m.ref ? [words(m.ref.span)] : []);
   for (const om of rec.omissions) {
+    if (refSpans.some((r) => isWordSubset(words(om.span), r) || isWordSubset(r, words(om.span)))) continue; // "scratch the soup": removed, not forgotten
     if (remarkOnly && !rec.omissions.some(strong)) { ledger.push({ turn: t, event: "omission_ignored_in_remark", data: { span: om.span } }); continue; }
     const alreadyThere = form.lines.some((l) =>
       (l.item_id && om.item_ids.includes(l.item_id)) ||
@@ -313,7 +317,15 @@ function menuInfo(about: string | null, menu: Menu, _form: OrderForm): Info {
       const fake = { line_id: 0, span: about, item_id: item.id, qty: 1, choices: {}, modifiers: [], held: [], notes: [], slot_candidates: {}, status: { kind: "complete" as const } };
       return { kind: "item", item, unit_cents: unitCents(fake, item) };
     }
-    if (r.kind === "ambiguous") return { kind: "list", names: r.ids.map((id) => menu.items.get(id)!.display_name) };
+    if (r.kind === "ambiguous") {
+      const its = r.ids.map((id) => menu.items.get(id)!);
+      const kinds = new Set(its.map((i) => i.facets.kind ?? i.display_name));
+      if (kinds.size === 1 && its.every((i) => i.facets.size)) { // one pizza in three sizes: describe it once, list the sizes
+        const first = its.find((i) => i.description) ?? its[0];
+        return { kind: "item", item: first, unit_cents: first.base_cents, sizes: its.map((i) => ({ name: i.facets.size!, cents: i.base_cents })) };
+      }
+      return { kind: "list", names: its.map((i) => i.display_name) };
+    }
     const cat = itemsInCategory(menu, about);
     if (cat.length) return { kind: "list", names: cat.map((i) => i.display_name) };
     return { kind: "not_found", about };

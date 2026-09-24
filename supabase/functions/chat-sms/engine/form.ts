@@ -179,9 +179,11 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: (line: L
     if ("line_id" in ref) return live.some((l) => l.line_id === ref.line_id) ? [ref.line_id] : [];
     if ("ordinal" in ref) { const l = live[ref.ordinal - 1]; return l ? [l.line_id] : []; }
     if ("last" in ref) return live.length === 1 ? [live[0].line_id] : (live.length ? [live[live.length - 1].line_id] : []);
-    const hits = live.filter((l) => lineSpanMatcher(l, ref.span)).map((l) => l.line_id);
+    const hitLines = live.filter((l) => lineSpanMatcher(l, ref.span));
+    const hits = hitLines.map((l) => l.line_id);
     if (hits.length === 0 && contentWords(ref.span).length === 0) return live.length === 1 ? [live[0].line_id] : live.map((l) => l.line_id);
-    return hits;
+    const sig = (l: Line) => JSON.stringify([l.item_id, l.choices, l.modifiers, l.notes]);
+    return hitLines.length > 1 && hitLines.every((l) => sig(l) === sig(hitLines[0])) ? [hits[0]] : hits; // two identical lines: no "which one"
   };
 
   /** the one line a change/remove refers to; records a decline or a which-one question and returns null otherwise */

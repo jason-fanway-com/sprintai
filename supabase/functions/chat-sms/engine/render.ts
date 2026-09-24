@@ -19,7 +19,7 @@ export type Decline = { code: DeclineCode | "dropped_line" | "address_to_pickup"
 
 export type Info =
   | { kind: "cart"; totals: Totals }
-  | { kind: "item"; item: MenuItem; unit_cents: number }
+  | { kind: "item"; item: MenuItem; unit_cents: number; sizes?: Array<{ name: string; cents: number }> }
   | { kind: "list"; names: string[] }
   | { kind: "categories"; names: string[] }
   | { kind: "not_found"; about: string }
@@ -177,7 +177,8 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
       else parts.push([T.cartHeader(), ...receiptRows(i.totals).map((r, k) => `${k + 1}) ${r}`), moneyLine(i.totals)].join("\n"));
     } else if (i.kind === "item") {
       const opts = i.item.groups.filter((g) => g.kind === "slot").map((g) => `${title(g.name)}: ${g.choices.map((c) => c.name).slice(0, 6).join(", ")}`);
-      parts.push(T.itemInfo(i.item.display_name, dollars(i.unit_cents), opts, i.item.description));
+      const money = i.sizes ? sortSizes(i.sizes.map((x) => x.name)).map((n) => `${title(n)} ${dollars(i.sizes!.find((x) => x.name === n)!.cents)}`).join(", ") : dollars(i.unit_cents);
+      parts.push(T.itemInfo(i.sizes ? title(i.item.facets.kind ?? i.item.display_name) : i.item.display_name, money, opts, i.item.description));
     } else if (i.kind === "list") parts.push(T.listInfo(i.names.slice(0, 10)));
     else if (i.kind === "categories") parts.push(T.menuCategories(i.names));
     else if (i.kind === "not_found") parts.push(T.notOnMenu(i.about));

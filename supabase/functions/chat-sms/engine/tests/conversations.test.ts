@@ -909,6 +909,45 @@ Deno.test("tester pass 1: '12 inch' restating the item's own size is never a kit
   assertEquals(o.form.lines[0].notes, []);
 });
 
+Deno.test("tester pass 2: 'medium pepperoni pizza. small pepperoni pizza' is one of each, never two mediums", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  const o = say(f, "a medium pepperoni pizza. small pepperoni pizza", [
+    { kind: "add_line", item_span: "pepperoni pizza", qty: 1, option_spans: ["medium"] },
+    { kind: "add_line", item_span: "pepperoni pizza", qty: 1, option_spans: ["small"] },
+  ]);
+  assertEquals(o.form.lines.map((l) => l.item_id).sort(), [IDS.pepPizzaM, IDS.pepPizzaS].sort());
+  assertEquals(o.form.omissions, []);
+});
+
+Deno.test("tester pass 2: 'hawaiian pie' is the Hawaiian pizza, not every pizza", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  const o = say(f, "a hawaiian pie", [{ kind: "add_line", item_span: "hawaiian pie", qty: 1, option_spans: [] }]);
+  assertEquals(o.form.lines[0].item_id, "hawL");
+});
+
+Deno.test("tester pass 2: 'what comes on the pepperoni' answers once with the description and the size prices", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  const o = say(f, "what comes on the pepperoni pizza", [{ kind: "ask_menu", about_span: "pepperoni pizza" }]);
+  assertStringIncludes(o.reply, "Pepperoni Pizza: Our cheese pizza with pepperoni. Small $12.99, Medium $17.49, Large $21.00.");
+});
+
+Deno.test("tester pass 2: two identical lines never ask 'which one do you mean'; removing a line never asks 'did you also want' it", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "garlic knots", [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
+  o = say(o.form, "another garlic knots", [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
+  assertEquals(o.form.lines.length, 2);
+  o = say(o.form, "make the knots 3", [{ kind: "change_line", ref: { span: "knots" }, qty: 3 }]);
+  assert(!o.reply.includes("Which one do you mean"), o.reply);
+  let p = say(f, "a cup of lobster bisque and garlic knots", [{ kind: "add_line", item_span: "cup of lobster bisque", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
+  p = say(p.form, "actually scratch the soup", [{ kind: "remove_line", ref: { span: "soup" } }]);
+  assertEquals(p.form.lines.map((l) => l.item_id), [IDS.knots]);
+  assert(!p.reply.includes("Did you also want"), p.reply);
+});
+
 Deno.test("'20 wings' against 10-piece rows is two orders; the kind is still asked", () => {
   let f = newForm("vitos", "test-v1");
   f = say(f, "pickup").form;

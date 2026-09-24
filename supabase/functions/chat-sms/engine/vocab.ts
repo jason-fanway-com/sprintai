@@ -54,10 +54,7 @@ export function closedAnswer(form: OrderForm, message: string, menu: Menu): Move
 
   if (PICKUP.has(n)) return [{ kind: "answer", field: "fulfillment", value: "pickup" }];
   if (DELIVERY.has(n)) return [{ kind: "answer", field: "fulfillment", value: "delivery" }];
-  if (open?.kind === "fulfillment") {
-    if (n === "1") return [{ kind: "answer", field: "fulfillment", value: "pickup" }];
-    if (n === "2") return [{ kind: "answer", field: "fulfillment", value: "delivery" }];
-  }
+  if (open?.kind === "fulfillment" && (n === "1" || n === "2")) return [{ kind: "answer", field: "fulfillment", value: n === "1" ? "pickup" : "delivery" }];
 
   if (open?.kind === "tip") {
     const tip = parseTip(message);
@@ -68,31 +65,22 @@ export function closedAnswer(form: OrderForm, message: string, menu: Menu): Move
     if (YES.has(n)) return [{ kind: "answer_yes" }];
     if (NO.has(n)) return [{ kind: "answer_no" }];
   }
-  if (open?.kind === "items") {
-    if (NO.has(n)) return [{ kind: "answer", field: "items_done", value: true }];
-  }
+  if (open?.kind === "items" && NO.has(n)) return [{ kind: "answer", field: "items_done", value: true }];
   // "that's it" closes the item list whatever else is open (the open question is asked again after)
   if (CLOSURE.has(n) && open?.kind === "line_unresolved") return [{ kind: "remove_line", ref: { line_id: open.line_id } }, { kind: "answer", field: "items_done", value: true }];
   if (CLOSURE.has(n) && form.lines.length > 0) return [{ kind: "answer", field: "items_done", value: true }];
   if (!open && NO.has(n) && form.lines.length > 0) return [{ kind: "answer", field: "items_done", value: true }];
 
-  if (open?.kind === "line_ref" || open?.kind === "line_ambiguous") {
-    const d = DIGIT_RE.exec(n);
-    if (d) return [{ kind: "answer_option", value_span: d[1] }];
-  }
+  const digit = DIGIT_RE.exec(n)?.[1];
+  if (digit && (open?.kind === "line_ref" || open?.kind === "line_ambiguous")) return [{ kind: "answer_option", value_span: digit }];
   if (open?.kind === "line_slot" || open?.kind === "line_ambiguous" || open?.kind === "line_unresolved" || open?.kind === "line_picks") {
     if (SKIP.has(n)) return [{ kind: "remove_line", ref: { line_id: open.line_id } }];
     const line = form.lines.find((l) => l.line_id === open.line_id);
     if (line && open.kind === "line_slot" && line.item_id) {
       const g = menu.items.get(line.item_id)?.groups.find((x) => x.id === open.group_id);
       if (g && matchChoice(n, g, line.slot_candidates[g.id]).kind === "one") return [{ kind: "answer_option", value_span: message.trim() }];
-      const d = DIGIT_RE.exec(n);
-      if (g && d) {
-        const within = line.slot_candidates[g.id];
-        const pool = within ? g.choices.filter((c) => within.includes(c.id)) : g.choices;
-        const pick = pool[parseInt(d[1], 10) - 1];
-        if (pick) return [{ kind: "answer_option", value_span: pick.name }];
-      }
+      const within = line.slot_candidates[g?.id ?? ""], pick = g && digit ? (within ? g.choices.filter((c) => within.includes(c.id)) : g.choices)[parseInt(digit, 10) - 1] : undefined;
+      if (pick) return [{ kind: "answer_option", value_span: pick.name }];
     }
     if (line && open.kind === "line_ambiguous" && line.status.kind === "ambiguous") {
       const narrowed = narrow(line.status.candidates, n, menu);

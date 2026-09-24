@@ -18,10 +18,7 @@ const pick = (s: Set<string>): SpanResolution | null => s.size === 1 ? { kind: "
 /** Items whose term carries every content word of the span: exact word subsets first, else stems. */
 function coverAll(content: string[], menu: Menu): Set<string> {
   const exact = new Set<string>(), stems = new Set<string>(), contentSing = content.map(singular);
-  for (const t of menu.itemTerms) {
-    if (isWordSubset(content, t.words)) exact.add(t.target_id);
-    else if (contentSing.every((w) => wordMatches(w, new Set(t.wordsSing)))) stems.add(t.target_id);
-  }
+  for (const t of menu.itemTerms) (isWordSubset(content, t.words) ? exact : contentSing.every((w) => wordMatches(w, new Set(t.wordsSing))) ? stems : null)?.add(t.target_id);
   return exact.size > 0 ? exact : stems;
 }
 export function resolveSpan(span: string, menu: Menu): SpanResolution {
@@ -40,7 +37,11 @@ export function resolveSpan(span: string, menu: Menu): SpanResolution {
   // not the item's identity. A term that carries every content word ("chicken parmesan sandwich") wins first.
   const category = () => { for (const t of menu.categoryTerms) if (findWordRun(sw, t.words) >= 0) { const r = pick(new Set(itemsInCategory(menu, t.target_id).map((i) => i.id))); if (r) return r; } return null; };
   // "chicken wings" against the bare item term "chicken" and the category "wings": the category the customer named wins
-  if (ids.size > 0 && content.some((w) => !bestWords.some((b) => sameWord(b, singular(w))))) { const r = pick(coverAll(content, menu)) ?? category(); if (r) return r; }
+  if (ids.size > 0 && content.some((w) => !bestWords.some((b) => sameWord(b, singular(w))))) {
+    const cat = category(); const catIds = cat?.kind === "item" ? [cat.id] : cat?.kind === "ambiguous" ? cat.ids : null;
+    const inCat = catIds !== null && [...ids].every((id) => catIds.includes(id));
+    const r = pick(coverAll(content, menu)) ?? (inCat ? null : cat); if (r) return r; // "hawaiian pie": Hawaiian is already a pizza, keep it
+  }
   const run = pick(ids) ?? category(); if (run) return run;
   // Partial: every content word of the span appears inside some item term. Deterministic; a question unless unique.
   return (content.length > 0 ? pick(coverAll(content, menu)) : null) ?? { kind: "none" };
