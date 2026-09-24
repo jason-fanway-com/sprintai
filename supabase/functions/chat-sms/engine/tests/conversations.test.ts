@@ -960,6 +960,15 @@ Deno.test("tester pass 2: a slot answer with more in the message is not a closed
   assertEquals(o.form.lines[0].status.kind, "complete");
 });
 
+Deno.test("tester pass 2: 'grilled chicken salad please' picks Grilled Chicken Salad over Buffalo Grilled Chicken Salad", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "a salad", [{ kind: "add_line", item_span: "salad", qty: 1, option_spans: [] }]);
+  assertStringIncludes(o.reply, "What kind of salad");
+  o = say(o.form, "grilled chicken salad please", [{ kind: "answer_option", value_span: "grilled chicken salad please" }]);
+  assertEquals(o.form.lines[0].item_id, "gcs");
+});
+
 Deno.test("'20 wings' against 10-piece rows is two orders; the kind is still asked", () => {
   let f = newForm("vitos", "test-v1");
   f = say(f, "pickup").form;

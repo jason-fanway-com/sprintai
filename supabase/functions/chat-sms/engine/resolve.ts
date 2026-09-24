@@ -65,7 +65,7 @@ export function narrow(candidateIds: string[], span: string, menu: Menu): string
   // "ricotta mozzarella" among Ricotta Mozzarella / Ham Ricotta Mozzarella / Spinach Ricotta Mozzarella: the
   // candidate whose own name (minus size words) IS the answer wins over those that merely contain it
   if (keep.length > 1 && sw.some((w) => !words(menu.items.get(keep[0])?.category ?? "").map(singular).includes(w))) { // says more than the category noun
-    const nameWords = (id: string) => { const it = menu.items.get(id)!; return words(it.facets.kind ?? it.display_name).filter((w) => !SIZE_WORDS.has(w)).map(singular); };
+    const nameWords = (id: string) => words(menu.items.get(id)!.display_name).filter((w) => !SIZE_WORDS.has(w)).map(singular); // display name: "Grilled Chicken Salad", not the row's "Grilled Chicken"
     const common = nameWords(keep[0]).filter((w) => keep.every((id) => nameWords(id).includes(w)));
     const strip = (ws: string[]) => [...new Set(ws.filter((w) => !common.includes(w)))].sort();
     const exact = keep.filter((id) => sameWords(strip(nameWords(id)), strip(sw)));
