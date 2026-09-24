@@ -19,15 +19,9 @@ export type Ack =
 export type Decline = { code: DeclineCode | "dropped_line" | "address_to_pickup" | "tip_zero" | "checkout_failed"; span?: string };
 
 export type Info =
-  | { kind: "cart"; totals: Totals }
-  | { kind: "item"; item: MenuItem; unit_cents: number; sizes?: Array<{ name: string; cents: number }>; price: boolean }
-  | { kind: "list"; names: string[] }
-  | { kind: "categories"; names: string[] }
-  | { kind: "not_found"; about: string }
-  | { kind: "human" }
-  | { kind: "cancelled" }
-  | { kind: "started_over" }
-  | { kind: "unclear" };
+  | { kind: "cart"; totals: Totals } | { kind: "item"; item: MenuItem; unit_cents: number; sizes?: Array<{ name: string; cents: number }>; price: boolean }
+  | { kind: "list"; names: string[] } | { kind: "categories"; names: string[] } | { kind: "not_found"; about: string }
+  | { kind: "human" } | { kind: "cancelled" } | { kind: "started_over" } | { kind: "unclear" };
 
 export type Question =
   | { kind: "open"; open: OpenQuestion; count: number }
@@ -140,12 +134,7 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
   const added = plan.acks.filter((a): a is Ack & { kind: "line_added" } => a.kind === "line_added");
   const changed = plan.acks.filter((a): a is Ack & { kind: "line_changed" } => a.kind === "line_changed");
   const removed = plan.acks.filter((a): a is Ack & { kind: "line_removed" } => a.kind === "line_removed");
-  const fieldAcks: string[] = [];
-  for (const a of plan.acks) {
-    if (a.kind === "fulfillment") fieldAcks.push(T.ackFulfillment(a.value));
-    if (a.kind === "address") fieldAcks.push(T.ackAddress(a.text));
-    if (a.kind === "tip") fieldAcks.push(T.ackTip(dollars(a.cents)));
-  }
+  const fieldAcks = plan.acks.flatMap((a) => a.kind === "fulfillment" ? [T.ackFulfillment(a.value)] : a.kind === "address" ? [T.ackAddress(a.text)] : a.kind === "tip" ? [T.ackTip(dollars(a.cents))] : []);
   if (fieldAcks.length) parts.push(fieldAcks.join(" "));
   if (added.length) parts.push(T.ackAdded(added.map((a) => lineRow(a.line))));
   if (changed.length) parts.push(T.ackUpdated(changed.map((a) => lineRow(a.line))));
@@ -156,20 +145,11 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
     if (a.kind === "pending") parts.push(T.ackPending(a.items.map((i) => (i.qty > 1 ? `${i.qty} ${i.span}` : i.span))));
   }
 
-  for (const d of plan.declines) {
-    switch (d.code) {
-      case "no_such_line": parts.push(T.noSuchLine(d.span)); break;
-      case "nothing_to_remove": parts.push(T.nothingToRemove()); break;
-      case "address_not_found": parts.push(T.addressNotFound(d.span ?? "")); break;
-      case "address_out_of_zone": parts.push(T.addressOutOfZone(d.span ?? "That address")); break;
-      case "dropped_line": parts.push(T.droppedLine(d.span ?? "")); break;
-      case "address_to_pickup": parts.push(T.addressToPickup()); break;
-      case "tip_zero": parts.push(T.tipZero()); break;
-      case "tip_out_of_range": parts.push(T.tipOutOfRange()); break;
-      case "checkout_failed": parts.push(T.checkoutFailed()); break;
-      case "not_delivery_shop": break;
-    }
-  }
+  const declineText: Partial<Record<Decline["code"], (span?: string) => string>> = {
+    no_such_line: (sp) => T.noSuchLine(sp), nothing_to_remove: () => T.nothingToRemove(), address_not_found: (sp) => T.addressNotFound(sp ?? ""), address_out_of_zone: (sp) => T.addressOutOfZone(sp ?? "That address"),
+    dropped_line: (sp) => T.droppedLine(sp ?? ""), address_to_pickup: () => T.addressToPickup(), tip_zero: () => T.tipZero(), tip_out_of_range: () => T.tipOutOfRange(), checkout_failed: () => T.checkoutFailed(),
+  };
+  for (const d of plan.declines) { const f = declineText[d.code]; if (f) parts.push(f(d.span)); }
 
   if (plan.info) {
     const i = plan.info;

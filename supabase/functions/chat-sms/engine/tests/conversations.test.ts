@@ -1250,3 +1250,33 @@ Deno.test("tester pass 7 live: a size change sent as 'remove large' alone takes 
   assertStringIncludes(p.reply, "Ranch or Italian");
 });
 
+Deno.test("tester pass 8: adds beside a removal of the asked-about line stay adds with their counts; the model's line pointer yields to the line the words name", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "3 zorgblat sandwiches", [{ kind: "add_line", item_span: "zorgblat sandwiches", qty: 3, option_spans: [] }]);
+  assertEquals(o.form.lines[0].status.kind, "unresolved", o.reply);
+  o = say(o.form, "hmm ok lemme get 2 chicken parm sandwiches and a cheesesteak instead", [
+    { kind: "remove_line", ref: { span: "zorgblat sandwiches" } }, { kind: "add_line", item_span: "chicken parm sandwiches", qty: 2, option_spans: [] }, { kind: "add_line", item_span: "cheesesteak", qty: 1, option_spans: [] },
+  ]);
+  assertEquals(o.form.lines.map((l) => [l.item_id, l.qty]), [["chparm", 2], [IDS.cheesesteak, 1]], o.reply);
+  const cs = o.form.lines[1].line_id;
+  o = say(o.form, "white bread for both chicken parms", [{ kind: "answer_option", line_id: cs, value_span: "white bread for both chicken parms" }]);
+  assertEquals(o.form.lines[0].choices["breadG"], "brWhite", o.reply);
+  assertEquals(o.form.lines[1].held, []);
+});
+
+Deno.test("tester pass 8: counted breads for three hoagies split the line, one per bread", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "3 chicken parm sandwiches", [{ kind: "add_line", item_span: "chicken parm sandwiches", qty: 3, option_spans: [] }]);
+  assertStringIncludes(o.reply, "what bread?");
+  o = say(o.form, "one white, one rye, one wheat", [{ kind: "answer_option", value_span: "one white, one rye, one wheat" }]);
+  assertEquals(o.form.lines.map((l) => [l.qty, l.choices["breadG"]]), [[1, "brWhite"], [1, "brRye"], [1, "brWheat"]], o.reply);
+  let p = say(f, "3 chicken parm sandwiches", [{ kind: "add_line", item_span: "chicken parm sandwiches", qty: 3, option_spans: [] }]);
+  p = say(p.form, "two white one rye", [{ kind: "answer_option", value_span: "two white one rye" }]);
+  assertEquals(p.form.lines.map((l) => [l.qty, l.choices["breadG"]]), [[2, "brWhite"], [1, "brRye"]], p.reply);
+  let q = say(f, "3 chicken parm sandwiches", [{ kind: "add_line", item_span: "chicken parm sandwiches", qty: 3, option_spans: [] }]);
+  q = say(q.form, "white, white, rye", [{ kind: "answer_option", value_span: "white, white, rye" }]);
+  assertEquals(q.form.lines.map((l) => [l.qty, l.choices["breadG"]]), [[2, "brWhite"], [1, "brRye"]], q.reply);
+});
+

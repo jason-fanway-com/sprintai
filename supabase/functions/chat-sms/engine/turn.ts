@@ -4,7 +4,7 @@ import { asksPrice, EACH } from "./vocab.ts";
 import { apply, normalizeMoveBatch, type LedgerEntry, type Line, type LineMatcher, type Move, type OpenQuestion, type OrderForm, type LineRef } from "./form.ts";
 import type { Menu } from "./menu.ts";
 import { reconcile, scan } from "./crossread.ts";
-import { bindLine, lineMatchesSpan, narrow, resolveSpan, spanAnswersLine, lineNamedBySpan } from "./resolve.ts";
+import { bindLine, lineMatchesSpan, matchChoice, narrow, resolveSpan, spanAnswersLine, lineNamedBySpan } from "./resolve.ts";
 import { escalate, next, questionKey } from "./next.ts";
 import { priceLine, totals, unitCents } from "./price.ts";
 import { render, type Ack, type Decline, type Info, type Question, type ReplyPlan } from "./render.ts";
@@ -76,6 +76,7 @@ export function turn(input: TurnInput): TurnOutput {
     return { ...m, item_span: h.termWords.join(" "), option_spans: options };
   };
   const open = form0.open, focus = open && "line_id" in open ? form0.lines.find((l) => l.line_id === open.line_id) : undefined; let splitFocus = false;
+  const focusRemoved = !!focus && batch.some((x) => x.kind === "remove_line" && ("line_id" in x.ref ? x.ref.line_id === focus.line_id : "span" in x.ref && lineMatchesSpan(focus, x.ref.span, menu)));
   // a rejected add whose item word was invented ("pizza") but whose option words, or the item span's own
   // verbatim words ("plain" out of "plain pizza"), answer the open line question keeps that answer
   if (focus) for (const r of rec.rejected) {
@@ -84,12 +85,22 @@ export function turn(input: TurnInput): TurnOutput {
     const o = [itemVerbatim, ...r.move.option_spans].find((o) => words(o).length > 0 && words(o).every((w) => mw.includes(w)) && spanAnswersLine(focus, o, menu));
     if (o) { rec.accepted.push({ kind: "answer_option", value_span: o }); ledger.push({ turn: t, event: "salvaged_answer_from_rejected_add", data: { span: o } }); }
   }
+  // "one plain one pepperoni", "white, white, rye" as one string: cut at the count words, one piece per option, identical pieces merged
+  const countedPieces = (text: string) => splitList(text).flatMap((p) => { const out: string[][] = [[]]; for (const w of words(p)) { if (out[out.length - 1].length && leadingCount(w + " x").count !== null) out.push([]); out[out.length - 1].push(w); } return out.filter((x) => x.length).map((x) => x.join(" ")); })
+    .map((p) => { const lc = leadingCount(p); return { span: lc.rest || p, qty: lc.count ?? 1 }; }).reduce<Array<{ span: string; qty: number }>>((acc, p) => { const same = acc.find((q) => q.span === p.span); if (same) same.qty += p.qty; else acc.push(p); return acc; }, []);
+  // "3 turkey hoagies" + "one white, one rye, one wheat": counted options for the asked slot split the line, one per option
+  const openG = focus?.item_id && open?.kind === "line_slot" && focus.qty > 1 ? menu.items.get(focus.item_id)!.groups.find((g) => g.id === open.group_id) : undefined;
+  if (openG) for (const m of batch) {
+    const pieces = m.kind === "answer_option" && (m.line_id === undefined || m.line_id === focus!.line_id) ? countedPieces(m.value_span) : [];
+    if (pieces.length >= 2 && rec.accepted.includes(m) && pieces.reduce((n, p) => n + p.qty, 0) === focus!.qty && pieces.every((p) => matchChoice(p.span, openG).kind === "one")) {
+      rec.accepted.splice(rec.accepted.indexOf(m), 1, { kind: "split_line", line_id: focus!.line_id, parts: pieces.map((p) => ({ span: focus!.span, qty: p.qty, held: [p.span] })) });
+      ledger.push({ turn: t, event: "counted_slot_answers_split", data: { parts: pieces } });
+    }
+  }
   // "one of each except sweet potato" -> seven adds of "fries", one kind each: "fries" is not in the message, but every kind is a candidate of the line we asked about: a split, not inventions
   if (focus && focus.status.kind === "ambiguous") {
     const cands = focus.status.candidates, one = (text: string) => narrow(cands, text, menu).length === 1;
-    // "one plain one pepperoni" arrives as one string when the model does not split it: cut at the count words
-    const tokens = (text: string) => (({ count, rest }) => one(rest || text) ? [{ span: rest || text, qty: count ?? 1 }] : null)(leadingCount(text)) ?? splitList(text).flatMap((p) => { const out: string[][] = [[]]; for (const w of words(p)) { if (out[out.length - 1].length && leadingCount(w + " x").count !== null) out.push([]); out[out.length - 1].push(w); } return out.filter((x) => x.length).map((x) => x.join(" ")); })
-      .map((p) => { const lc = leadingCount(p); return { span: lc.rest || p, qty: lc.count ?? 1 }; });
+    const tokens = (text: string) => (({ count, rest }) => one(rest || text) ? [{ span: rest || text, qty: count ?? 1 }] : null)(leadingCount(text)) ?? countedPieces(text);
     // each add or answer naming exactly one kind of the asked-about line is a part ("fries"+["crazy"], "crazy fries", the answer "Bacon Cheese", "one plain one pepperoni")
     const partsOf = (m: Move) => m.kind === "add_line" ? (one([m.item_span, ...m.option_spans].join(" ")) && (lineMatchesSpan(focus, m.item_span, menu) || cands.some((id) => lineMatchesSpan({ ...focus, item_id: id }, m.item_span, menu))) ? [{ span: [m.item_span, ...m.option_spans].join(" "), qty: Math.max(1, m.qty) }] : [])
       : m.kind === "answer_option" && (m.line_id === undefined || m.line_id === focus.line_id) ? tokens(m.value_span).filter((p) => one(p.span)) : [];
@@ -136,6 +147,10 @@ export function turn(input: TurnInput): TurnOutput {
     // "make the large a medium" sent as remove:[large] alone: the other size word in the message is the size wanted
     const sizes = m0.kind === "change_line" && !m0.add_option_spans?.some((o) => words(o).some((w) => SIZE_WORDS.has(w))) && m0.remove_option_spans?.some((o) => words(o).some((w) => SIZE_WORDS.has(w))) ? [...new Set(mw.filter((w) => SIZE_WORDS.has(w) && !m0.remove_option_spans!.some((o) => words(o).includes(w))))] : [];
     const m: Move = m0.kind === "add_line" ? upgradeSpan(m0) : m0.kind === "change_line" && sizes.length === 1 ? { ...m0, add_option_spans: [...(m0.add_option_spans ?? []), sizes[0]] } : m0;
+    if (m.kind === "answer_option" && m.line_id !== undefined) { // "white bread for both chicken parms" pointed at the cheesesteak: the words name the line
+      const named = form0.lines.filter((l) => l.item_id && l.status.kind !== "complete" && contentWords(m.value_span).some((w) => menu.items.get(l.item_id!)!.words.some((iw) => sameWord(iw, w) || (w.length >= 4 && iw.startsWith(w)))));
+      if (named.length === 1 && named[0].line_id !== m.line_id) { ledger.push({ turn: t, event: "answer_rerouted_to_named_line", data: { span: m.value_span, from: m.line_id, line_id: named[0].line_id } }); moves.push({ ...m, line_id: named[0].line_id }); continue; }
+    }
       // "3 thin sicilians. one pepperoni, one sausage, one plain": options each preceded by a count that adds up to the quantity are one line each
     if (m.kind === "add_line" && m.qty >= 2 && m.option_spans.length >= 2) {
       const counts = m.option_spans.map((o) => { const i = findWordRun(mw, words(o)); return i > 0 ? leadingCount(mw[i - 1] + " x").count : null; });
@@ -147,7 +162,7 @@ export function turn(input: TurnInput): TurnOutput {
     }
     // an "item" answering the line we asked about is an answer; one answering ANOTHER pending line's question ("boneless" while we ask about the garlic bread) is routed there
     const span = m.kind === "add_line" ? m.item_span : m.kind === "answer_option" ? m.value_span : null;
-    if (span && focus) {
+    if (span && focus && !(m.kind === "add_line" && focusRemoved)) { // "scratch that. 2 chicken parms and a cheesesteak": adds beside the removal are new lines, not answers to the line going away
       const replacesUnresolved = m.kind === "add_line" && focus.status.kind === "unresolved" && resolveSpan(span, menu).kind !== "none";
       const target = spanAnswersLine(focus, span, menu) ? focus
         : form0.lines.find((l) => l.line_id !== focus.line_id && l.status.kind !== "complete" && spanAnswersLine(l, span, menu)) ?? (replacesUnresolved ? focus : undefined);

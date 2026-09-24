@@ -114,7 +114,7 @@ export type Move =
   | { kind: "answer_option"; value_span: string; line_id?: number }
   | { kind: "answer_yes" }
   | { kind: "answer_no" }
-  | { kind: "split_line"; line_id: number; parts: Array<{ span: string; qty: number }> }
+  | { kind: "split_line"; line_id: number; parts: Array<{ span: string; qty: number; held?: string[] }> }
   | { kind: "ask_menu"; about_span: string | null }
   | { kind: "talk"; text: string }
   | { kind: "control"; what: "cancel" | "start_over" | "human" | "greeting" | "unclear" | "show_cart" };
@@ -306,8 +306,8 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: LineMatc
         if (idx < 0 || m.parts.length === 0) break;
         const src = form.lines[idx];
         const cands = src.status.kind === "ambiguous" ? src.status.candidates : null;
-        const newLines = m.parts.map((p) => newLine(form, src.span, p.qty, src.held.filter((h) => !h.startsWith("-")),
-          { answers: [p.span], status: cands ? { kind: "ambiguous", candidates: cands, facet: null } : { kind: "unresolved" } }));
+        const newLines = m.parts.map((p) => newLine(form, src.span, p.qty, [...src.held.filter((h) => !h.startsWith("-")), ...(p.held ?? [])], // a resolved line splits by option and keeps its item
+          src.item_id ? { item_id: src.item_id, choices: { ...src.choices }, status: { kind: "needs_slot", group_id: "" } } : { answers: [p.span], status: cands ? { kind: "ambiguous", candidates: cands, facet: null } : { kind: "unresolved" } }));
         form.lines.splice(idx, 1, ...newLines);
         for (const l of newLines) touched.add(l.line_id);
         ledger.push({ turn: t, event: "split_line", data: { from: src.line_id, parts: m.parts, into: newLines.map((l) => l.line_id) } });
