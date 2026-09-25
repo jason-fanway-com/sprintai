@@ -1390,7 +1390,7 @@ Deno.test("finer touches: 'do you have X?' is answered and offered; 'did you add
   assertEquals(o.form.lines.length, 0);
   o = say(o.form, "yes");
   assertEquals(o.form.lines.map((l) => l.item_id), [IDS.knots], o.reply);
-  o = say(o.form, "did you add the garlic knots?");
+  o = say(o.form, "did you add the garlic knots?", [{ kind: "control", what: "unclear" }]); // the model shrugs; the engine knows
   assertStringIncludes(o.reply, "Yes, 1 × Garlic Knots (6) is on your order.");
   assert(!o.reply.includes("Did you also want"), o.reply);
   assertEquals(o.form.lines.length, 1);

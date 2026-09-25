@@ -2,6 +2,7 @@
 // moves (closed vocabulary first, else one model call), validate addresses,
 // run turn(), create or expire the checkout session, persist, return the reply.
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { contentWords } from "./normalize.ts";
 import { buildMenu, type LexiconEntry, type Menu, type RawMenuItem, type ShopConfig } from "./menu.ts";
 import { newForm, type Move, type OrderForm } from "./form.ts";
 import { closedAnswer } from "./vocab.ts";
@@ -252,6 +253,11 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
     conversation_id: input.conversationId, tenant_id: input.shop.tenant_id, role: "assistant", content: reply,
   }).select("id").single();
   await deps.supabase.from("engine_ledger").insert(out.ledger.map((e) => ({ cart_id: input.cart.id, turn_no: form.turn_no, event: e.event, data: e.data ?? null }))).then(() => {}, () => {});
+  // "oh sorry, glizzies means hot dog": the word is saved for this shop, so the next customer who says it is understood (the menu cache re-reads on the newer lexicon row)
+  for (const e of out.ledger) if (e.event === "taught_term") {
+    const d = e.data as { span: string; item_id: string | null }, menuId = menu.version.split(":")[0];
+    if (d.item_id && menuId && menuId !== "none" && contentWords(d.span).length > 0) await deps.supabase.from("lexicon").insert({ shop_id: input.shop.id, menu_id: menuId, term: contentWords(d.span).join(" "), target_type: "item", target_id: d.item_id, provenance: "customer", weight: 1, active: true }).then(() => {}, () => {});
+  }
 
   return { reply, form, assistantMessageId: (msg as { id: string } | null)?.id ?? null, ms: { model: modelMs, judge: judgeMs, total: Date.now() - t0 } };
 }

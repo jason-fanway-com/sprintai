@@ -333,7 +333,7 @@ export function turn(input: TurnInput): TurnOutput {
   for (const r of res.removed) {
     const it = r.item_id ? menu.items.get(r.item_id) : null, taught = !it && batch.find((m) => m.kind === "add_line");
     if (it) acks.push({ kind: "line_removed", name: it.display_name });
-    else if (taught && taught.kind === "add_line") { acks.push({ kind: "gotcha" }); ledger.push({ turn: t, event: "taught_term", data: { span: r.span, means: taught.item_span } }); } // "oh sorry, glizzies means hot dog": a replacement, and a word to remember
+    else if (taught && taught.kind === "add_line") { acks.push({ kind: "gotcha" }); ledger.push({ turn: t, event: "taught_term", data: { span: r.span, means: taught.item_span, item_id: form.lines.find((l) => newIds.has(l.line_id) && l.item_id && lineMatchesSpan(l, taught.item_span, menu))?.item_id ?? null } }); } // "oh sorry, glizzies means hot dog": a replacement, and a word to remember
     else declines.push({ code: "dropped_line", span: r.span });
   }
 
@@ -348,7 +348,7 @@ export function turn(input: TurnInput): TurnOutput {
   if (res.control?.what === "cancel") info = { kind: "cancelled" };
   if (res.control?.what === "start_over") info = { kind: "started_over" };
   const askedSomethingNew = q !== null && questionKey(q) !== questionKey(input.form.open);
-  if (res.control?.what === "unclear" && !progress && !askedSomethingNew && !res.talk) info = { kind: "unclear" };
+  if (res.control?.what === "unclear" && !progress && !askedSomethingNew && !res.talk) info = info ?? { kind: "unclear" }; // an answer we found ourselves ("yes, 1 × Hot Dog is on your order") beats the model's shrug
   if (moves.length === 0 && rec.rejected.length === 0 && !progress && count > 0) info = info ?? { kind: "unclear" };
 
   let question: Question | null = null;
