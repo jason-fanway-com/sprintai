@@ -132,7 +132,7 @@ export function turn(input: TurnInput): TurnOutput {
     const keep: typeof rec.omissions = [];
     for (const om of rec.omissions) {
       // "yo i said chicken cheesesteak sandwich" against a list that missed it: a whole item name sharing a word with the line is the line, not a second order
-      const names = (focus.status.kind === "ambiguous" || focus.status.kind === "unresolved") && !batch.some((m) => m.kind === "add_line") && om.item_ids.length === 1 && !(focus.status.kind === "ambiguous" && focus.status.candidates.includes(om.item_ids[0])) && contentWords(om.span).some((w) => contentWords(focus.span).some((f) => sameWord(w, f)));
+      const names = (focus.status.kind === "ambiguous" || focus.status.kind === "unresolved") && !batch.some((m) => m.kind === "add_line") && om.item_ids.length === 1 && !(focus.status.kind === "ambiguous" && focus.status.candidates.includes(om.item_ids[0])) && (focus.status.kind === "unresolved" || contentWords(om.span).some((w) => contentWords(focus.span).some((f) => sameWord(w, f)))); // an unknown word being explained ("glizzies" -> "that means hot dog") needs no shared word
       if ((names || spanAnswersLine(focus, om.span, menu)) && !rec.accepted.some((m) => m.kind === "answer_option" && words(m.value_span).join(" ") === om.span)) {
         rec.accepted.push({ kind: "answer_option", value_span: om.span });
         ledger.push({ turn: t, event: names ? "mention_names_the_line" : "uncovered_word_answers_question", data: { span: om.span } });
@@ -338,7 +338,7 @@ export function turn(input: TurnInput): TurnOutput {
     const item = form.lines.find((l) => l.line_id === id)?.item_id ?? mergedInto(id)?.item_id ?? (fresh.length === 1 && res.removed.some((r) => r.line_id === id) ? fresh[0] : null);
     if (item) { taught.add(was.span); ledger.push({ turn: t, event: "taught_term", data: { span: was.span, item_id: item } }); }
   }
-  if (taught.size) acks.push({ kind: "gotcha" });
+  if (taught.size) { acks.push({ kind: "gotcha" }); res.talk = null; } // "oh, gotcha" is the whole reaction; the model's "no problem, got it" would double it
   for (const r of res.removed) { const it = r.item_id ? menu.items.get(r.item_id) : null; if (it) acks.push({ kind: "line_removed", name: it.display_name }); else if (!taught.has(r.span)) declines.push({ code: "dropped_line", span: r.span }); }
 
   let info: Info | null = null;

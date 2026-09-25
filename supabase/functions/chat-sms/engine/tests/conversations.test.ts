@@ -1403,13 +1403,15 @@ Deno.test("finer touches: 'do you have X?' is answered and offered; 'did you add
   assertEquals(p.ledger.filter((e) => e.event === "taught_term").map((e) => (e.data as { span: string; item_id: string }).item_id), [IDS.knots]);
   // the live model shape: a no-op change on the unknown line plus the add, which the engine reads as the answer; and the plain answer shape
   for (const moves of [[{ kind: "change_line", ref: { span: "zorgblats" }, qty: null, add_option_spans: [], remove_option_spans: [] }, { kind: "add_line", item_span: "garlic knots", qty: 2, option_spans: [] }], [{ kind: "answer_option", value_span: "garlic knots" }],
-    [{ kind: "change_line", ref: { span: "zorgblats" }, qty: null, add_option_spans: [], remove_option_spans: [] }, { kind: "remove_line", ref: { span: "zorgblats" } }, { kind: "add_line", item_span: "garlic knots", qty: 2, option_spans: [] }]] as Move[][]) {
+    [{ kind: "change_line", ref: { span: "zorgblats" }, qty: null, add_option_spans: [], remove_option_spans: [] }, { kind: "remove_line", ref: { span: "zorgblats" } }, { kind: "add_line", item_span: "garlic knots", qty: 2, option_spans: [] }],
+    [{ kind: "talk", text: "No problem! I got it." }]] as Move[][]) { // and the model that only chats: the mention explains the unknown word
     let q = say(f, "garlic knots and two zorgblats", [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "zorgblats", qty: 2, option_spans: [] }]); // the knots already there: the taught ones merge into them
     q = say(q.form, "oh sorry, that means garlic knots", moves);
     assertStringIncludes(q.reply, "Oh, gotcha.");
     assert(!q.reply.includes("don't see") && !q.reply.includes("leave"), q.reply);
     assertEquals(q.ledger.filter((e) => e.event === "taught_term").map((e) => (e.data as { span: string }).span), ["zorgblats"], q.reply);
-    assertEquals(q.form.lines.map((l) => [l.item_id, l.qty]), [[IDS.knots, 3]], q.reply);
+    assertEquals(q.form.lines.map((l) => [l.item_id, l.qty]), [[IDS.knots, 3]], q.reply); // "two zorgblats" keeps its two through the explanation, whatever shape the model sent
+    assert(!q.reply.includes("No problem"), q.reply);
   }
 });
 
