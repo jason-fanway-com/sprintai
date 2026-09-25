@@ -1,5 +1,6 @@
 // runner.test.ts — the I/O shell against an in-memory Supabase fake. Proves the
 // loads, the writes, the checkout create on handoff and the expire on reopen.
+import { faithfulRewrite } from "../normalize.ts";
 import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { runEngineTurn, type RunnerDeps, type RunnerInput } from "../runner.ts";
 import { IDS, RAW_ITEMS, RAW_LEXICON } from "./fixture-menu.ts";
@@ -54,12 +55,14 @@ class FakeDb {
 
 const shop = { id: "vitos", tenant_id: "t1", name: "Vito's Pizza", delivery_enabled: true, delivery_fee_cents: 0, tax_rate_bps: 600, phone_number_e164: "+16105550100", latitude: 40.57, longitude: -75.57, delivery_radius_mi: 5 };
 
-function deps(db: FakeDb, fakeInterpret: (msg: string) => Move[], fakeJudge?: (asks: Array<{ span: string }>) => Record<string, number> | null): RunnerDeps & { created: unknown[]; expired: string[] } {
+function deps(db: FakeDb, fakeInterpret: (msg: string) => Move[], fakeJudge?: (asks: Array<{ span: string }>) => Record<string, number> | null, fakeVoice?: (draft: string) => string): RunnerDeps & { created: unknown[]; expired: string[] } {
   const created: unknown[] = []; const expired: string[] = [];
   return {
     // deno-lint-ignore no-explicit-any
     supabase: db as any,
-    model: { provider: fakeJudge ? "openrouter" : "anthropic", model: "fake", apiKey: "x" },
+    model: { provider: fakeJudge || fakeVoice ? "openrouter" : "anthropic", model: "fake", apiKey: "x" },
+    // deno-lint-ignore no-explicit-any
+    ...(fakeVoice ? { voiceImpl: ((inp: { draft: string }) => { const text = fakeVoice(inp.draft), why = faithfulRewrite(inp.draft, text); return Promise.resolve(why ? { ok: false as const, reason: "unfaithful" as const, detail: why, ms: 1 } : { ok: true as const, text, ms: 1 }); }) as any } : {}),
     ...(fakeJudge ? { judgeImpl: ((ctx: { asks: Array<{ span: string }> }) => { const p = fakeJudge(ctx.asks); return Promise.resolve(p ? { ok: true as const, p, ms: 1, cost: 0 } : { ok: false as const, reason: "timeout" as const, detail: "fake", ms: 1500 }); }) as any } : {}),
     geocoder: (text: string) => Promise.resolve({ text, formatted: text + ", Allentown, PA", validated: true, zone_ok: true }),
     createCheckout: (req) => { created.push(req); return Promise.resolve({ ok: true as const, sessionId: "cs_test_1", url: "https://pay.example/o/abc" }); },
@@ -217,3 +220,20 @@ Deno.test("runner: the menu is downloaded once per version, not once per message
   await runEngineTurn({ ...base, cart: { ...cart, engine_form: out.form }, message: "yes", isFirstContact: false }, d);
   assertEquals(db.reads.filter((r) => r.paged && r.table === "lexicon").length, 2, "reloaded once after the change");
 });
+
+Deno.test("runner: the voice rewrites a short reply when it keeps every fact, and the draft goes out when it does not", async () => {
+  const say = async (rewrite: (d: string) => string) => {
+    const db = new FakeDb(); const d = deps(db, (m) => m === "garlic knots" ? [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }] : [], undefined, rewrite);
+    const base = { shop, conversationId: "c1", lastBotMessage: null, cart: { id: "cart1", engine_form: null, stripe_checkout_session_id: null, test_mode: true, notes: null } } as Parameters<typeof runEngineTurn>[0];
+    let out = await runEngineTurn({ ...base, message: "pickup" }, d);
+    out = await runEngineTurn({ ...base, message: "garlic knots", cart: { ...base.cart, engine_form: out.form } }, d);
+    return out.reply;
+  };
+  assertEquals(await say((d) => d.replace("Added 1 × Garlic Knots (6). Anything else?", "One order of Garlic Knots (6), got it. Anything else?")), "One order of Garlic Knots (6), got it. Anything else?");
+  const draft = await say((d) => d); // an identical rewrite passes too
+  assertStringIncludes(draft, "Garlic Knots (6)");
+  assertEquals(await say((d) => d.replace("Anything else?", "Anything else? Your total is $6.34.")), draft); // an invented number: the draft
+  assertEquals(await say((d) => "Sure thing! Anything else?"), draft); // the item name dropped: the draft
+  assertEquals(await say((d) => d.replace("Anything else?", "Want fries with that?")), draft); // a menu item the draft never named, lowercase: the draft
+});
+

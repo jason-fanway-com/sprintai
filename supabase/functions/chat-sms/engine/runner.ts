@@ -8,6 +8,9 @@ import { newForm, type Move, type OrderForm } from "./form.ts";
 import { closedAnswer } from "./vocab.ts";
 import { interpret, summarizeOpen, type ModelConfig } from "./interpret.ts";
 import { judgeOmissions } from "./judge.ts";
+import { voice, eligible } from "./voice.ts";
+/** off with ENGINE_VOICE=off; the model can be changed without a deploy of the core */
+export const VOICE = { enabled: (Deno.env.get("ENGINE_VOICE") ?? "on") !== "off", model: Deno.env.get("ENGINE_VOICE_MODEL") ?? undefined, timeoutMs: 2500 };
 import { turn, JUDGE } from "./turn.ts";
 import { render } from "./render.ts";
 import { totals } from "./price.ts";
@@ -58,8 +61,10 @@ export interface RunnerDeps {
   interpretImpl?: typeof interpret;
   /** test seam; defaults to the real judge call (Jev via the same OpenRouter key) */
   judgeImpl?: typeof judgeOmissions;
+  /** test seam; defaults to the real voice call (Haiku via the same OpenRouter key) */
+  voiceImpl?: typeof voice;
 }
-export interface RunnerOutput { reply: string; form: OrderForm; assistantMessageId: string | null; ms: { model: number | null; judge?: number | null; total: number } }
+export interface RunnerOutput { reply: string; form: OrderForm; assistantMessageId: string | null; ms: { model: number | null; voice?: number | null; judge?: number | null; total: number } }
 
 const PAGE = 1000;
 async function pageAll<T>(q: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>): Promise<T[]> {
@@ -249,6 +254,16 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
     delivery_address: form.address && form.address.validated && form.address.zone_ok ? { formatted: form.address.formatted ?? form.address.text } : null,
     ...(form.checkout_session_id ? {} : { phase: form.lines.length > 0 ? "building" : "greeting" }),
   }).eq("id", input.cart.id);
+  // 5. the voice: the same facts, said like a person; the draft goes out unchanged on any doubt (see voice.ts)
+  let voiceMs: number | null = null;
+  if (VOICE.enabled && deps.model.provider === "openrouter" && eligible(reply)) {
+    const v = await (deps.voiceImpl ?? voice)({ draft: reply, customer: input.message, lastBot: input.lastBotMessage }, { apiKey: deps.model.apiKey, shopName: input.shop.name, model: VOICE.model, timeoutMs: VOICE.timeoutMs });
+    voiceMs = v.ms;
+    const said = (s: string) => new Set(scan(s, menu).hits.flatMap((h) => h.item_ids)), draftItems = said(reply); // a menu item the draft never named ("and fries") is invented, whatever its casing
+    const invented = v.ok ? [...said(v.text)].filter((id) => !draftItems.has(id)) : [];
+    if (v.ok && invented.length === 0) { out.ledger.push({ turn: form.turn_no, event: "voice_rephrased", data: { draft: reply, text: v.text, ms: v.ms } }); reply = v.text; }
+    else out.ledger.push({ turn: form.turn_no, event: "voice_kept_draft", data: { reason: v.ok ? "invented_mention" : v.reason, detail: v.ok ? v.text : v.detail.slice(0, 200), ms: v.ms } });
+  }
   const { data: msg } = await deps.supabase.from("messages").insert({
     conversation_id: input.conversationId, tenant_id: input.shop.tenant_id, role: "assistant", content: reply,
   }).select("id").single();
@@ -259,5 +274,5 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
     if (d.item_id && menuId && menuId !== "none" && contentWords(d.span).length > 0) await deps.supabase.from("lexicon").insert({ shop_id: input.shop.id, menu_id: menuId, term: contentWords(d.span).join(" "), target_type: "item", target_id: d.item_id, provenance: "stated", weight: 1, active: true, evidence: { source: "customer", cart_id: input.cart.id } }).then(() => {}, () => {}); // the enum has no "customer": stated by the customer, evidence says so
   }
 
-  return { reply, form, assistantMessageId: (msg as { id: string } | null)?.id ?? null, ms: { model: modelMs, judge: judgeMs, total: Date.now() - t0 } };
+  return { reply, form, assistantMessageId: (msg as { id: string } | null)?.id ?? null, ms: { model: modelMs, judge: judgeMs, voice: voiceMs, total: Date.now() - t0 } };
 }

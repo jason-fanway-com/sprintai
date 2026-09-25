@@ -5,10 +5,10 @@ import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.t
 const DIR = new URL("../", import.meta.url).pathname;
 const PURE = ["form.ts", "crossread.ts", "resolve.ts", "price.ts", "next.ts", "render.ts", "turn.ts", "normalize.ts", "menu.ts", "vocab.ts"];
 // project.ts writes the legacy cart_json shape for tickets and dashboards: persistence, not decisions
-const ADAPTERS = ["interpret.ts", "judge.ts", "runner.ts", "address.ts", "project.ts"];
+const ADAPTERS = ["interpret.ts", "judge.ts", "voice.ts", "runner.ts", "address.ts", "project.ts"];
 const CORE = [...PURE, ...ADAPTERS, "templates.ts"];
 const REGEX_ALLOWED = new Set(["normalize.ts", "vocab.ts", "menu.ts", "templates.ts"]);
-const FETCH_ALLOWED = new Set(["interpret.ts", "judge.ts", "address.ts"]);
+const FETCH_ALLOWED = new Set(["interpret.ts", "judge.ts", "voice.ts", "address.ts"]);
 const ADAPTER_IMPORTS_ALLOWED = ["../../_shared/error-log.ts", "https://esm.sh/@supabase/supabase-js", "npm:@anthropic-ai/sdk"];
 const PURE_BUDGET = 2000;
 const ADAPTER_BUDGET = 800;
@@ -63,12 +63,12 @@ Deno.test("rule: the engine imports nothing from the old engine or index.ts", as
   assertEquals(offenders, []);
 });
 
-Deno.test("rule: only interpret.ts and judge.ts talk to a model; only address.ts talks to the geocoder", async () => {
+Deno.test("rule: only interpret.ts, judge.ts and voice.ts talk to a model; only address.ts talks to the geocoder", async () => {
   const offenders: string[] = [];
   for (const f of CORE) {
     const code = stripCommentsAndStrings(await read(f));
     if (!FETCH_ALLOWED.has(f) && /\bfetch\s*\(|fetchImpl/.test(code)) offenders.push(`${f}: fetch`);
-    if (f !== "interpret.ts" && f !== "judge.ts" && /Anthropic|openrouter/.test(code)) offenders.push(`${f}: model client`);
+    if (f !== "interpret.ts" && f !== "judge.ts" && f !== "voice.ts" && /Anthropic|openrouter/.test(code)) offenders.push(`${f}: model client`);
   }
   assertEquals(offenders, []);
 });
@@ -94,7 +94,7 @@ Deno.test("rule: customer-facing sentences live only in templates.ts", async () 
   const offenders: string[] = [];
   const sentence = /["`][^"`\n]*\b[a-z]+ [a-z]+\b[^"`\n]*[?.!]["`]/g;
   for (const f of CORE) {
-    if (f === "templates.ts" || f === "interpret.ts" || f === "judge.ts") continue; // prompts to a model, not to a customer
+    if (f === "templates.ts" || f === "interpret.ts" || f === "judge.ts" || f === "voice.ts") continue; // prompts to a model, not to a customer
     const src = (await read(f)).replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
     const hits = src.match(sentence) ?? [];
     for (const h of hits) offenders.push(`${f}: ${h}`);

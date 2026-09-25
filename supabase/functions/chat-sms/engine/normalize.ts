@@ -116,3 +116,27 @@ function editDistance(a: string, b: string, max: number): number {
   }
   return prev[b.length];
 }
+
+/**
+ * Does a rewrite say exactly what the draft says? Returns null when it does, else the first reason it does not.
+ * Every number (a price, a count) must survive and none may appear from nowhere; every mid-sentence capitalised
+ * name (an item, an option, a size) must survive and none may appear from nowhere; a question stays a question;
+ * no wait times or contact promises; no runaway length. Sentence-initial words are template scaffolding and free.
+ */
+export function faithfulRewrite(draft: string, text: string): string | null {
+  const WORDS: Record<string, string> = { one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9", ten: "10", eleven: "11", twelve: "12" };
+  const nums = (s: string) => (s.toLowerCase().replace(/\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/g, (w) => WORDS[w]).match(/\$?\d+(?:\.\d+)?/g) ?? []).map((n) => n.replace(/^\$/, "")).filter((n) => n !== "1"); // "two hot dogs" is 2; "a hot dog" may drop the 1
+  const names = (s: string) => new Set((s.replace(/(^|[.?!]\s+)([A-Z])/g, (_m, a, b) => `${a}${b.toLowerCase()}`).match(/\b[A-Z][A-Za-z'&-]+(?:\s+[A-Z][A-Za-z'&-]+)*/g) ?? []).map((x) => x.toLowerCase()));
+  const dn = nums(draft), tn = nums(text);
+  for (const n of dn) if (!tn.includes(n)) return `dropped ${n}`;
+  for (const n of tn) if (!dn.includes(n)) return `invented ${n}`;
+  const dNames = names(draft), tNames = names(text), low = text.toLowerCase();
+  for (const n of dNames) if (!low.includes(n)) return `dropped ${n}`;
+  for (const n of tNames) if (!draft.toLowerCase().includes(n)) return `invented ${n}`;
+  if (draft.includes("?") && !text.includes("?")) return "lost the question";
+  if (talkClaimsTime(text) && !talkClaimsTime(draft)) return "invented a time";
+  if (/\b(text|call|notify|message|ping)\b.*\b(you|when|once)\b/i.test(text)) return "promised contact";
+  if (text.length > draft.length * 1.6 + 60) return "too long";
+  return null;
+}
+

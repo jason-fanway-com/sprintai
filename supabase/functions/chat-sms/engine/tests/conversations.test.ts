@@ -9,7 +9,7 @@ import { turn } from "../turn.ts";
 import { narrow } from "../resolve.ts";
 import { closedAnswer } from "../vocab.ts";
 import { totals } from "../price.ts";
-import { words, closestWord } from "../normalize.ts";
+import { words, closestWord, faithfulRewrite } from "../normalize.ts";
 
 const menu = fixtureMenu();
 const addr = (text: string) => ({ kind: "answer", field: "address", value: { text, formatted: text, validated: true, zone_ok: true } } as Move);
@@ -1413,5 +1413,19 @@ Deno.test("finer touches: 'do you have X?' is answered and offered; 'did you add
     assertEquals(q.form.lines.map((l) => [l.item_id, l.qty]), [[IDS.knots, 3]], q.reply); // "two zorgblats" keeps its two through the explanation, whatever shape the model sent
     assert(!q.reply.includes("No problem"), q.reply);
   }
+});
+
+Deno.test("voice: a rewrite must keep every number and name, keep the question, and invent nothing", () => {
+  const draft = `Added 2 × Hot Dog. Anything else?`;
+  assertEquals(faithfulRewrite(draft, "Two hot dogs added. Anything else?"), null);
+  assertEquals(faithfulRewrite(draft, "Two hot dogs added. Anything else for you?"), null);
+  assertEquals(faithfulRewrite(draft, "Two hot dogs added."), "lost the question");
+  assertEquals(faithfulRewrite(draft, "Two hot dogs and a Large Cheese Pizza added. Anything else?"), "invented large cheese pizza");
+  assertEquals(faithfulRewrite(draft, "Two hot dogs added, $11.98. Anything else?"), "invented 11.98");
+  assertEquals(faithfulRewrite("Added 1 × Garlic Knots (6). Anything else?", "One order of garlic knots, got it. Anything else?"), "dropped 6"); // the (6) is a fact
+  assertEquals(faithfulRewrite("Added 1 × Garlic Knots (6). Anything else?", "Garlic Knots (6), got it. Anything else?"), null);
+  assertEquals(faithfulRewrite("Chicken Parmesan Sandwich: what bread? White, Rye, or Wheat?", "What bread for the Chicken Parmesan Sandwich? White, Rye, or Wheat?"), null);
+  assertEquals(faithfulRewrite("Chicken Parmesan Sandwich: what bread? White, Rye, or Wheat?", "What bread for the Chicken Parmesan Sandwich? White or Wheat?"), "dropped rye");
+  assertEquals(faithfulRewrite("Anything else?", "Anything else? It'll be ready in 15 minutes."), "invented 15");
 });
 
