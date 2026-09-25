@@ -44,7 +44,7 @@ export function parseTip(text: string): Tip | null {
   return { kind: "cents", value: Math.round(num * 100) };
 }
 
-const QUESTION_LEAD = new Set(["do", "does", "did", "is", "are", "have", "has", "can", "could", "would", "will", "what", "which", "how", "any", "u", "you", "yall", "whats"]);
+const QUESTION_LEAD = new Set(["do", "does", "did", "is", "are", "have", "has", "can", "could", "would", "will", "what", "which", "how", "whats", "got"]); // "you dont have to text me" is not a question
 /** "do you have hot dogs?", "did you add a hot dog": the customer is asking, not ordering */
 export function isQuestion(message: string): boolean { const w = words(message); return message.trim().endsWith("?") || (w.length > 0 && QUESTION_LEAD.has(w[0])) || (w.length > 1 && (w[0] === "yes" || w[0] === "ok") && QUESTION_LEAD.has(w[1])); }
 export function closedAnswer(form: OrderForm, message: string, menu: Menu): Move[] | null {

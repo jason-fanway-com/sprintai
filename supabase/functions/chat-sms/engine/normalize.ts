@@ -126,7 +126,7 @@ function editDistance(a: string, b: string, max: number): number {
 export function faithfulRewrite(draft: string, text: string): string | null {
   const WORDS: Record<string, string> = { one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9", ten: "10", eleven: "11", twelve: "12" };
   const nums = (s: string) => (s.toLowerCase().replace(/\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/g, (w) => WORDS[w]).match(/\$?\d+(?:\.\d+)?/g) ?? []).map((n) => n.replace(/^\$/, "")).filter((n) => n !== "1"); // "two hot dogs" is 2; "a hot dog" may drop the 1
-  const names = (s: string) => new Set((s.replace(/(^|[.?!]\s+)([A-Z])/g, (_m, a, b) => `${a}${b.toLowerCase()}`).match(/\b[A-Z][A-Za-z'&-]+(?:\s+[A-Z][A-Za-z'&-]+)*/g) ?? []).map((x) => x.toLowerCase()));
+  const names = (s: string) => new Set((s.replace(/(^|[.?!:]\s+)([A-Z])/g, (_m, a, b) => `${a}${b.toLowerCase()}`).match(/\b[A-Z][A-Za-z'&-]+(?:\s+[A-Z][A-Za-z'&-]+)*/g) ?? []).map((x) => x.toLowerCase()));
   const dn = nums(draft), tn = nums(text);
   for (const n of dn) if (!tn.includes(n)) return `dropped ${n}`;
   for (const n of tn) if (!dn.includes(n)) return `invented ${n}`;
@@ -139,4 +139,7 @@ export function faithfulRewrite(draft: string, text: string): string | null {
   if (text.length > draft.length * 1.6 + 60) return "too long";
   return null;
 }
+
+/** "5620 Cetronia Rd, Allentown, PA 18106, USA" as a person would text it: without the country. */
+export function withoutCountry(address: string): string { return address.replace(/,\s*USA$/, ""); }
 

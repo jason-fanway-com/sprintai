@@ -3,7 +3,7 @@ import type { DeclineCode, Fulfillment, OpenQuestion, OrderForm } from "./form.t
 import type { Menu, MenuItem } from "./menu.ts";
 import { dollars, type PricedLine, type Totals } from "./price.ts";
 import { GROUP_PROMPTS, groupPrompt, orList, sortSizes, T, title, type Voice } from "./templates.ts";
-import { contentWords, singular, words, sameWord } from "./normalize.ts";
+import { contentWords, singular, words, sameWord, withoutCountry } from "./normalize.ts";
 
 export type Ack =
   | { kind: "line_added"; line: PricedLine } | { kind: "line_changed"; line: PricedLine } | { kind: "line_removed"; name: string } | { kind: "fulfillment"; value: Fulfillment }
@@ -175,7 +175,7 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
     if (q.kind === "open") parts.push(renderQuestion(q.open, q.count, form, menu, q.heard));
     else if (q.kind === "readback") {
       parts.push([
-        T.readbackHeader(form.fulfillment, form.address?.formatted ?? form.address?.text ?? null, !form.said_robot),
+        T.readbackHeader(form.fulfillment, withoutCountry(form.address?.formatted ?? form.address?.text ?? "") || null, !form.said_robot),
         ...receiptRows(q.totals).map((r, k) => `${k + 1}) ${r}`),
         moneyLine(q.totals),
         T.confirmAsk(q.count),

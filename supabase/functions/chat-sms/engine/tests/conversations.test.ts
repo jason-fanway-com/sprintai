@@ -1394,6 +1394,11 @@ Deno.test("finer touches: 'do you have X?' is answered and offered; 'did you add
   assertStringIncludes(o.reply, "Yes, 1 × Garlic Knots (6) is on your order.");
   assert(!o.reply.includes("Did you also want"), o.reply);
   assertEquals(o.form.lines.length, 1);
+  o = say(o.form, "do you have a cheesesteak?", [{ kind: "ask_menu", about_span: "cheesesteak" }]); // an item whose name IS the term: offered, accepted, then asked about
+  o = say(o.form, "yes");
+  o = say(o.form, "did you add the cheesesteak?", [{ kind: "control", what: "unclear" }]);
+  assertStringIncludes(o.reply, "Yes, 1 × Cheesesteak is on your order.");
+  assertEquals(o.form.lines.length, 2);
   let p = say(f, "add two zorgblats", [{ kind: "add_line", item_span: "zorgblats", qty: 2, option_spans: [] }]);
   assertStringIncludes(p.reply, "couldn't find");
   p = say(p.form, "oh sorry, that means garlic knots", [{ kind: "remove_line", ref: { span: "zorgblats" } }, { kind: "add_line", item_span: "garlic knots", qty: 2, option_spans: [] }]);
@@ -1427,5 +1432,6 @@ Deno.test("voice: a rewrite must keep every number and name, keep the question, 
   assertEquals(faithfulRewrite("Chicken Parmesan Sandwich: what bread? White, Rye, or Wheat?", "What bread for the Chicken Parmesan Sandwich? White, Rye, or Wheat?"), null);
   assertEquals(faithfulRewrite("Chicken Parmesan Sandwich: what bread? White, Rye, or Wheat?", "What bread for the Chicken Parmesan Sandwich? White or Wheat?"), "dropped rye");
   assertEquals(faithfulRewrite("Anything else?", "Anything else? It'll be ready in 15 minutes."), "invented 15");
+  assertEquals(faithfulRewrite("Yes, we do. Hot Dog: Served with fries. Want one?", "Yeah we do, the Hot Dog comes with fries. You want one?"), null); // "Served" after the colon is scaffolding
 });
 

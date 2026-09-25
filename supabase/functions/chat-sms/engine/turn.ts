@@ -10,7 +10,7 @@ import { priceLine, totals, unitCents } from "./price.ts";
 import { render, type Ack, type Decline, type Info, type Question, type ReplyPlan } from "./render.ts";
 import type { Voice } from "./templates.ts";
 import { itemsInCategory } from "./menu.ts";
-import { contentWords, leadingCount, splitList, words, findWordRun, isWordSubset, sameWord, STOPWORDS, SIZE_WORDS } from "./normalize.ts";
+import { contentWords, leadingCount, splitList, words, findWordRun, isWordSubset, sameWord, STOPWORDS, SIZE_WORDS, withoutCountry } from "./normalize.ts";
 
 export interface TurnInput {
   form: OrderForm;
@@ -254,13 +254,19 @@ export function turn(input: TurnInput): TurnOutput {
   const refSpans = moves.flatMap((m) => (m.kind === "remove_line" || m.kind === "change_line") && "span" in m.ref ? [words(m.ref.span)] : []);
   const cartWords = form.lines.flatMap((l) => l.item_id ? menu.items.get(l.item_id)!.words : []), asking = isQuestion(input.message) && !res.askMenu && !input.closed;
   let cartAnswer: Info | null = null; // "did you add a hot dog?": answer from the cart; if it is not there, offer it
+  if (asking && !rec.accepted.some((m) => m.kind === "add_line" || m.kind === "change_line" || m.kind === "remove_line")) for (const h of hits) {
+    const span = mw.slice(h.start, h.end).join(" "), onOrder = form.lines.find((l) => l.item_id && (h.item_ids.includes(l.item_id) || lineNamedBySpan(l, span, menu)));
+    if ((!onOrder && h.item_ids.length !== 1) || (contentWords(span).length < 2 && contentWords(input.message).length > 6)) continue; // a lone generic word deep in a sentence ("my house") is not the question
+    cartAnswer = onOrder ? { kind: "cart_has", qty: onOrder.qty, name: menu.items.get(onOrder.item_id!)!.display_name } : { kind: "cart_lacks", name: menu.items.get(h.item_ids[0])!.display_name };
+    if (!onOrder && !form.omissions.some((o) => o.span === span)) form.omissions.push({ span, qty: 1, declined: false, offer: true });
+    ledger.push({ turn: t, event: "cart_question_answered", data: { span, has: !!onOrder } }); break;
+  }
   const askedItem = typeof res.askMenu === "string" && isQuestion(input.message) ? menuInfo(res.askMenu, menu, false) : null; // "do you have hot dogs?": the next question is "want one?"
   if (askedItem?.kind === "item" && !form.lines.some((l) => l.item_id === askedItem.item.id) && !form.omissions.some((o) => o.span === words(askedItem.item.display_name).join(" "))) form.omissions.push({ span: words(askedItem.item.display_name).join(" "), qty: 1, declined: false, offer: true });
   for (const om of rec.omissions) {
     if (refSpans.some((r) => isWordSubset(words(om.span), r) || isWordSubset(r, words(om.span)))) continue; // "scratch the soup": removed, not forgotten
     if (remarkOnly && !rec.omissions.some(strong)) { ledger.push({ turn: t, event: "omission_ignored_in_remark", data: { span: om.span } }); continue; }
-    const onOrder = form.lines.find((l) => l.item_id && lineNamedBySpan(l, om.span, menu));
-    if (asking && om.item_ids.length === 1 && !cartAnswer) { cartAnswer = onOrder ? { kind: "cart_has", qty: onOrder.qty, name: menu.items.get(onOrder.item_id!)!.display_name } : { kind: "cart_lacks", name: menu.items.get(om.item_ids[0])!.display_name }; if (!onOrder) form.omissions.push({ span: om.span, qty: om.qty, declined: false, offer: true }); ledger.push({ turn: t, event: "cart_question_answered", data: { span: om.span, has: !!onOrder } }); continue; }
+    if (asking && cartAnswer) continue; // the question was about this mention; it is answered below, not asked back
     if (contentWords(om.span).every((w) => cartWords.some((cw) => sameWord(cw, w)))) { ledger.push({ turn: t, event: "omission_restates_cart", data: { span: om.span } }); continue; } // "just the chicken and pizza": the lines already there
     const alreadyThere = form.lines.some((l) =>
       (l.item_id && om.item_ids.includes(l.item_id)) ||
@@ -305,7 +311,7 @@ export function turn(input: TurnInput): TurnOutput {
     if (e.event === "answer") {
       const d = e.data as { field: string; value?: unknown; accepted?: boolean };
       if (d.field === "fulfillment") acks.push({ kind: "fulfillment", value: d.value as "pickup" | "delivery" });
-      if (d.field === "address" && form.address?.validated && form.address.zone_ok) acks.push({ kind: "address", text: form.address.formatted ?? form.address.text });
+      if (d.field === "address" && form.address?.validated && form.address.zone_ok) acks.push({ kind: "address", text: withoutCountry(form.address.formatted ?? form.address.text) });
       if (d.field === "tip" && d.accepted !== false && form.tip) acks.push({ kind: "tip", cents: totals(form, menu).tip_cents });
     }
   }
