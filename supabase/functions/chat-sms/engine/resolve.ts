@@ -159,7 +159,7 @@ const PLACEMENT = new Set(["half", "whole", "pizza", "side", "left", "right"]), 
 const SIZE_ONLY = new Set(["small", "medium", "large", "xlarge", "personal", "regular"]);
 function normalizeUnit(u: string): string { return words(u)[0] ?? u; }
 
-let menuTermWords: Map<string, Set<string>> = new Map(), menuRef: Menu;
+let menuTermWords: Map<string, Set<string>> = new Map(), menuRef: Menu, filledNow = new Set<string>();
 
 /** "6 plain, 6 everything" or "plain" against a bundle's flavor list. */
 function applyBundleSpan(line: Line, item: MenuItem, span: string): boolean {
@@ -183,8 +183,8 @@ function applyBundleSpan(line: Line, item: MenuItem, span: string): boolean {
 /** Apply one held span to a bound line. Returns true when it was consumed as a priced choice. */
 function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true): boolean {
   if (item.bundle) return applyBundleSpan(line, item, span) || isWordSubset(words(span), item.words);
-  const removing = span.startsWith("-");
-  const text = removing ? span.slice(1) : span;
+  const removing = span.startsWith("-"), answer = span.startsWith("?");
+  const text = removing || answer ? span.slice(1) : span;
   if (removing) {
     for (const g of item.groups) { const m = matchChoice(text, g); if (m.kind === "one" && line.modifiers.includes(m.choice_id)) { line.modifiers = line.modifiers.filter((x) => x !== m.choice_id); return true; } }
     const rw = words(text); if (rw.length === 1 && SIZE_ONLY.has(rw[0]) && item.facets.size && item.facets.size !== rw[0]) return true; // "not Large" once the row is already the medium: nothing left to do
@@ -197,11 +197,14 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true)
   let filled = false;
   for (const g of open) {
     const m = matchChoice(text, g, line.slot_candidates[g.id]);
-    if (m.kind === "one") { line.choices[g.id] = m.choice_id; delete line.slot_candidates[g.id]; filled = true; }
+    if (m.kind === "one") { line.choices[g.id] = m.choice_id; delete line.slot_candidates[g.id]; filled = true; filledNow.add(g.id); }
     else if (m.kind === "many" && !filled) { line.slot_candidates[g.id] = m.choice_ids; return true; }
   }
   if (filled) return true;
-  for (const g of done) { const m = matchChoice(text, g); if (m.kind === "one") { line.choices[g.id] = m.choice_id; return true; } }
+  for (const g of done) { // two answers to one slot in one turn ask between them, never last-one-wins
+    const m = matchChoice(text, g); if (m.kind !== "one") continue;
+    if (filledNow.has(g.id) && line.choices[g.id] !== m.choice_id) { line.slot_candidates[g.id] = [line.choices[g.id], m.choice_id]; delete line.choices[g.id]; } else line.choices[g.id] = m.choice_id; return true;
+  }
   // 2. a modifier
   for (const g of item.groups) {
     if (g.kind !== "modifier") continue;
@@ -219,7 +222,7 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true)
   const own = ownWords(item);
   if (sw.every((w) => own.has(w) || own.has(singular(w)))) return true; // restating the item name or size
   if (sw.every((w) => SIZE_ONLY.has(w))) return false; // a size on an item that has no sizes: not an instruction
-  if (mayNote && !line.notes.includes(text)) line.notes.push(text); // said twice ("fries extra crispy" then "french fries extra crispy") is one note
+  if (mayNote && !answer && !line.notes.includes(text)) line.notes.push(text); // said twice is one note; an unreadable answer to the slot we asked is a re-ask, never a kitchen note
   return false;
 }
 
@@ -228,7 +231,7 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true)
  * Returns the item it ended on, if any.
  */
 export function bindLine(line: Line, menu: Menu): void {
-  menuTermWords = menu.termWordsByItem; menuRef = menu;
+  menuTermWords = menu.termWordsByItem; menuRef = menu; filledNow = new Set();
   // An unresolved line whose customer gave a replacement span: swap the span.
   if (line.item_id === null && line.status.kind === "unresolved" && (line.answers?.length ?? 0) > 0) {
     const first = line.answers![0];

@@ -18,7 +18,7 @@ export type Info =
   | { kind: "human" } | { kind: "cancelled" } | { kind: "started_over" } | { kind: "unclear" };
 
 export type Question =
-  | { kind: "open"; open: OpenQuestion; count: number }
+  | { kind: "open"; open: OpenQuestion; count: number; heard?: string }
   | { kind: "readback"; totals: Totals; count: number }
   | { kind: "handoff"; totals: Totals; url: string | null };
 
@@ -50,7 +50,8 @@ function moneyLine(t: Totals): string {
 
 
 const lineAndItem = (form: OrderForm, menu: Menu, id: number) => { const l = form.lines.find((x) => x.line_id === id); return [l, l?.item_id ? menu.items.get(l.item_id) ?? null : null] as const; };
-export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, menu: Menu): string {
+export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, menu: Menu, heard?: string): string {
+  const missed = (what: string) => heard && count > 0 ? `${T.missed(heard, what)} ` : ""; // second time round, say what we heard and could not read
   switch (q.kind) {
     case "fulfillment": return T.fulfillment(count);
     case "address": return T.address(count);
@@ -88,7 +89,7 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
           return k;
         };
         const kinds = [...new Set(kindsRaw.map(label))];
-        return T.whatKind(noun, asked, kinds);
+        return missed("one of those") + T.whatKind(noun, asked, kinds);
       }
       if (facet === "size") {
         const sizes = sortSizes([...new Set(cands.map((c) => c.facets.size).filter((s): s is string => !!s))]);
@@ -103,7 +104,7 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
       const g = item?.groups.find((x) => x.id === q.group_id);
       if (!l || !item || !g) return T.unclear();
       const within = l.slot_candidates[g.id], choices = (within ? g.choices.filter((c) => within.includes(c.id)) : g.choices).map((c) => c.name);
-      return T.slot(item.display_name, groupPrompt(g.name), choices, count);
+      return missed(`the ${g.name.toLowerCase()}`) + T.slot(item.display_name, groupPrompt(g.name), choices, count);
     }
     case "line_picks": {
       const [l, item] = lineAndItem(form, menu, q.line_id);
@@ -167,7 +168,7 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
 
   if (plan.question) {
     const q = plan.question;
-    if (q.kind === "open") parts.push(renderQuestion(q.open, q.count, form, menu));
+    if (q.kind === "open") parts.push(renderQuestion(q.open, q.count, form, menu, q.heard));
     else if (q.kind === "readback") {
       parts.push([
         T.readbackHeader(form.fulfillment, form.address?.formatted ?? form.address?.text ?? null),

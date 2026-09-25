@@ -264,7 +264,7 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: LineMatc
         const lid = m.line_id ?? (open && (open.kind === "line_slot" || open.kind === "line_ambiguous" || open.kind === "line_unresolved" || open.kind === "line_picks") ? open.line_id : undefined);
         const line = lid !== undefined ? form.lines.find((l) => l.line_id === lid) : undefined;
         if (line) {
-          if (line.status.kind === "ambiguous" || line.status.kind === "unresolved") (line.answers ??= []).push(m.value_span); else line.held.push(m.value_span);
+          if (line.status.kind === "ambiguous" || line.status.kind === "unresolved") (line.answers ??= []).push(m.value_span); else line.held.push((line.status.kind === "needs_slot" ? "?" : "") + m.value_span); // "?": an answer to the slot we asked, never a kitchen note if unreadable
           touched.add(line.line_id);
           ledger.push({ turn: t, event: "answer_option", data: { line_id: line.line_id, span: m.value_span, routed: m.line_id !== undefined } });
         } else if (open && open.kind === "line_ref") { // a numbered pick for "which one do you mean?"

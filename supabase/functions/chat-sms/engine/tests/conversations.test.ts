@@ -1328,3 +1328,39 @@ Deno.test("tester pass 10: 'french fries extra crispy' answers the fries questio
   assertEquals(o.form.lines[0].notes, ["extra crispy"], o.reply); // once, not once per time it was said
 });
 
+Deno.test("ask, don't guess: the read-back says a robot built it and takes corrections before and after the pay link", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "a cheesesteak and garlic knots", [{ kind: "add_line", item_span: "cheesesteak", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
+  o = say(o.form, "thats it");
+  assertStringIncludes(o.reply, "I'm a robot, and I do make mistakes");
+  assertStringIncludes(o.reply, "Reply YES if that's right");
+  o = say(o.form, "actually make it 2 cheesesteaks and drop the knots", [{ kind: "change_line", ref: { span: "cheesesteaks" }, qty: 2, add_option_spans: [], remove_option_spans: [] }, { kind: "remove_line", ref: { span: "knots" } }]);
+  assertEquals(o.form.lines.map((l) => [l.item_id, l.qty]), [[IDS.cheesesteak, 2]], o.reply);
+  assertStringIncludes(o.reply, "Here's what I have"); // corrected, and read back again for a fresh YES
+  o = say(o.form, "yes");
+  assert(!o.reply.includes("Here's what I have"), o.reply); // confirmed: on to the payment link
+  o = say(o.form, "wait add garlic knots too", [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
+  assertEquals(o.form.lines.length, 2, o.reply);
+  assertStringIncludes(o.reply, "Here's what I have"); // a change after the link re-shows the read-back, never charges silently
+});
+
+Deno.test("ask, don't guess: a re-ask names what we heard; two answers to one slot ask between them; an unreadable answer is never a kitchen note", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "house salad", [{ kind: "add_line", item_span: "house salad", qty: 1, option_spans: [] }]);
+  o = say(o.form, "buffalo flavor", [{ kind: "answer_option", value_span: "buffalo flavor" }]);
+  assertStringIncludes(o.reply, `Sorry, I didn't catch "buffalo flavor" as the dressing.`);
+  assertEquals(o.form.lines[0].notes, [], o.reply);
+  o = say(o.form, "the spicy one", [{ kind: "answer_option", value_span: "the spicy one" }]);
+  assertStringIncludes(o.reply, "Reply a number"); // third time: numbers
+  assertStringIncludes(o.reply, "1) Ranch");
+  o = say(o.form, "1");
+  assertEquals(o.form.lines[0].choices[IDS.dressingGroup], IDS.ranch, o.reply);
+  let p = say(f, "house salad", [{ kind: "add_line", item_span: "house salad", qty: 1, option_spans: [] }]);
+  p = say(p.form, "ranch. no wait italian. ugh actually ranch", [{ kind: "answer_option", value_span: "italian" }, { kind: "answer_option", value_span: "ranch" }]);
+  assertEquals(p.form.lines[0].status.kind, "needs_slot", p.reply); // conflicting reads in one turn ask, never last-one-wins
+  assertStringIncludes(p.reply, "Italian");
+  assertStringIncludes(p.reply, "Ranch");
+});
+

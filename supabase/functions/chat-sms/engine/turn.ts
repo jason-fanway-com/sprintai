@@ -56,6 +56,7 @@ export function turn(input: TurnInput): TurnOutput {
   const batch = normalizeMoveBatch(input.moves, lineQuestionOpen).filter((m) => { // the model never talks about menu items: "We have chicken cheesesteak, but..." is the engine's to say or not
     const bad = m.kind === "talk" && scan(m.text, menu).hits.length > 0; if (bad) ledger.push({ turn: t, event: "talk_dropped_menu_words", data: { text: (m as { text: string }).text } }); return !bad;
   }), rec = reconcile(input.message, batch, menu, askedSpans);
+  if (rec.unaccounted.length && !input.closed) ledger.push({ turn: t, event: "unaccounted_words", data: { words: rec.unaccounted } }); // the floor's gauge: customer words no move or mention placed
   ledger.push({ turn: t, event: "model_moves", data: { moves: batch } }); // what the model said, before any of our reading of it
   for (const r of rec.rejected) ledger.push({ turn: t, event: "rejected_span_not_in_message", data: r });
 
@@ -271,13 +272,9 @@ export function turn(input: TurnInput): TurnOutput {
   const declines: Decline[] = res.declines.map((d) => ({ code: d.code, span: d.span }));
   const note = escalate(form, menu);
   if (note) {
-    ledger.push({ turn: t, event: "escalated", data: note });
-    const [code, span] = note.split(":");
-    if (code === "dropped_line") declines.push({ code: "dropped_line", span });
-    if (code === "address_to_pickup") declines.push({ code: "address_to_pickup" });
-    if (code === "tip_zero") declines.push({ code: "tip_zero" });
-    q = next(form, menu, null); key = questionKey(q); count = 0;
-    form.open = q; form.asked = { key, count };
+    ledger.push({ turn: t, event: "escalated", data: note }); const [code, span] = note.split(":");
+    if (code === "dropped_line" || code === "address_to_pickup" || code === "tip_zero") declines.push({ code, span: code === "dropped_line" ? span : undefined });
+    q = next(form, menu, null); key = questionKey(q); count = 0; form.open = q; form.asked = { key, count };
   }
   if (q && "line_id" in q) {
     const l = form.lines.find((x) => x.line_id === q.line_id);
@@ -337,7 +334,7 @@ export function turn(input: TurnInput): TurnOutput {
   if (form.status === "abandoned") question = null;
   else if (handoff) question = { kind: "handoff", totals: totals(form, menu), url: input.checkoutUrl ?? null };
   else if (q?.kind === "confirm") question = { kind: "readback", totals: totals(form, menu), count };
-  else if (q) question = { kind: "open", open: q, count };
+  else if (q) question = { kind: "open", open: q, count, heard: count > 0 && !conversational && !input.closed ? words(input.message).join(" ") : undefined };
 
   // a first-contact greeting only when nothing else was said and we are asking the opener
   const plan: ReplyPlan = {

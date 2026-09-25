@@ -1,7 +1,7 @@
 // crossread.ts — the second reader. A deterministic lexicon scan of the customer
 // message, reconciled against the model's moves. Disagreement becomes a question,
 // never a silent add or a silent drop.
-import { contentWords, findWordRun, leadingCount, sameWord, words } from "./normalize.ts";
+import { contentWords, findWordRun, leadingCount, sameWord, words, STOPWORDS, SIZE_WORDS, isDigits } from "./normalize.ts";
 import type { Menu } from "./menu.ts";
 import type { Move } from "./form.ts";
 
@@ -11,8 +11,7 @@ const NEGATION = new Set(["no", "not", "without", "hold", "skip", "minus", "nah"
 /** Greedy longest-match, non-overlapping, item terms only. */
 export function scan(message: string, menu: Menu): { words: string[]; hits: Hit[] } {
   const w = words(message);
-  const hits: Hit[] = [];
-  let i = 0;
+  const hits: Hit[] = []; let i = 0;
   while (i < w.length) {
     let best: Hit | null = null;
     for (const t of menu.itemTerms) {
@@ -48,6 +47,7 @@ export interface Reconciled {
   accepted: Move[];
   /** moves whose item_span is not in the message (invented) */
   rejected: Array<{ move: Move; span: string }>;
+  unaccounted: string[]; // content words no accepted span and no menu mention covers
   /** lexicon hits no accepted move covers: candidates for "did you also want…?" */
   omissions: Array<{ span: string; item_ids: string[]; qty: number }>;
 }
@@ -101,5 +101,6 @@ export function reconcile(message: string, moves: Move[], menu: Menu, alreadyAsk
     }
     omissions.push({ span, item_ids: h.item_ids, qty });
   }
-  return { accepted, rejected, omissions };
+  for (const h of hits) for (let k = h.start; k < h.end; k++) covered[k] = true;
+  return { accepted, rejected, omissions, unaccounted: mw.filter((w, k) => !covered[k] && !STOPWORDS.has(w) && !SIZE_WORDS.has(w) && !isDigits(w)) };
 }

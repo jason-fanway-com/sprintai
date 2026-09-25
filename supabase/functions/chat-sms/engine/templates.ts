@@ -69,12 +69,14 @@ export const T = {
     `Reply 0 for no tip, or a number for a percent.`,
   ][Math.min(c, 2)],
   confirmAsk: (c: number) => [
-    `Reply YES to get your payment link, or tell me what to change.`,
-    `Reply YES to pay, or tell me what to change.`,
+    `Reply YES if that's right and I'll send your payment link, or tell me what to change.`,
+    `Is that right? Reply YES to pay, or tell me what to change.`,
     `Reply YES to get your payment link, or NO to change something.`,
   ][Math.min(c, 2)],
+  // Jason, 2026-09-24: the customer's confirmation is the final safeguard; say plainly that a robot built this
   readbackHeader: (f: "pickup" | "delivery" | null, address: string | null) =>
-    f === "delivery" && address ? `Here's your order for delivery to ${address}:` : `Here's your order for pickup:`,
+    `Just to be sure I got everything right (I'm a robot, and I do make mistakes). Here's what I have for ${f === "delivery" && address ? `delivery to ${address}` : "pickup"}:`,
+  missed: (heard: string, what: string) => `Sorry, I didn't catch "${heard}" as ${what}.`,
   moneyLine: (parts: string[]) => parts.join(" · "),
   handoff: (url: string | null) => (url ? `Pay here: ${url}` : `I couldn't create your payment link just now.`),
   checkoutFailed: () => `I couldn't create your payment link just now. Reply YES to try again.`,
@@ -82,7 +84,7 @@ export const T = {
   afterPay: (delivery: boolean) => delivery ? `It'll be on its way about 30-45 minutes after you pay.` : `We'll have it ready about 10-15 minutes after you pay. We look forward to seeing you.`,
 
   lineUnresolved: (span: string, c: number) => [
-    `I couldn't find "${span}" on the menu. What would you like instead?`,
+    `Hmm, I couldn't find "${span}" on our menu. What is it, or what would you like instead?`,
     `Still nothing for "${span}". Name another item, or reply SKIP to leave it off.`,
     `Reply SKIP to leave "${span}" off, or name a menu item.`,
   ][Math.min(c, 2)],
@@ -96,6 +98,7 @@ export const T = {
   whichOne: (names: string[]) => `Which one?\n${numbered(names)}`,
   whichOneMore: (shown: number, total: number) => `Reply a number, or say more of the name. (${shown} of ${total} shown)`,
   slot: (itemName: string, groupPrompt: string, choices: string[], c: number) => {
+    if (c >= 2) return `${itemName}: ${groupPrompt}? Reply a number.\n${numbered(choices)}`; // third time: numbers, the one answer nothing can misread
     const list = c >= 1 || choices.length <= 5 ? ` ${orList(choices)}?` : ` For example ${choices.slice(0, 3).join(", ")}. Reply OPTIONS to hear them all.`;
     return `${itemName}: ${groupPrompt}?${list}`;
   },
@@ -119,7 +122,7 @@ export const T = {
   cancelled: () => `Okay, I've cancelled that order. Text us anytime to start a new one.`,
   startedOver: () => `Okay, starting fresh.`,
   noEta: () => `Pickup orders are usually ready in about 10-15 minutes, delivery in about 30-45.`,
-  unclear: (c = 0) => [`Sorry, I didn't catch that.`, `I didn't follow that.`, `I can take your order here. Name an item, ask about the menu, or reply DONE when you're finished.`][Math.min(c, 2)],
+  unclear: (c = 0) => [`Sorry, I didn't catch that.`, `Sorry, I didn't follow that. I'm a robot and I miss things.`, `I can take your order here. Name an item, ask about the menu, or reply DONE when you're finished.`][Math.min(c, 2)],
   fallback: () => `Sorry, something went wrong on our end. Please text again in a moment.`,
 };
 
