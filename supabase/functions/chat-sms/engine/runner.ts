@@ -256,7 +256,7 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
   // "oh sorry, glizzies means hot dog": the word is saved for this shop, so the next customer who says it is understood (the menu cache re-reads on the newer lexicon row)
   for (const e of out.ledger) if (e.event === "taught_term") {
     const d = e.data as { span: string; item_id: string | null }, menuId = menu.version.split(":")[0];
-    if (d.item_id && menuId && menuId !== "none" && contentWords(d.span).length > 0) await deps.supabase.from("lexicon").insert({ shop_id: input.shop.id, menu_id: menuId, term: contentWords(d.span).join(" "), target_type: "item", target_id: d.item_id, provenance: "customer", weight: 1, active: true }).then(() => {}, () => {});
+    if (d.item_id && menuId && menuId !== "none" && contentWords(d.span).length > 0) await deps.supabase.from("lexicon").insert({ shop_id: input.shop.id, menu_id: menuId, term: contentWords(d.span).join(" "), target_type: "item", target_id: d.item_id, provenance: "stated", weight: 1, active: true, evidence: { source: "customer", cart_id: input.cart.id } }).then(() => {}, () => {}); // the enum has no "customer": stated by the customer, evidence says so
   }
 
   return { reply, form, assistantMessageId: (msg as { id: string } | null)?.id ?? null, ms: { model: modelMs, judge: judgeMs, total: Date.now() - t0 } };
