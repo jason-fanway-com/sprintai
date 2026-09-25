@@ -79,7 +79,8 @@ export interface OrderForm {
   open: OpenQuestion | null;
   /** how many consecutive turns the same question has been open without progress */
   asked: { key: string | null; count: number };
-  omissions: Array<{ span: string; qty: number; declined: boolean }>;
+  omissions: Array<{ span: string; qty: number; declined: boolean; offer?: boolean }>; // offer: we answered "do you have X?" and asked "want one?"
+  said_robot?: boolean; // the "I'm a robot" line is said once per conversation
   turn_no: number;
   /** set by the runner when a checkout session exists for the confirmed form */
   checkout_session_id: string | null;

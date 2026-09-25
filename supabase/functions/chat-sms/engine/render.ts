@@ -8,12 +8,13 @@ import { contentWords, singular, words, sameWord } from "./normalize.ts";
 export type Ack =
   | { kind: "line_added"; line: PricedLine } | { kind: "line_changed"; line: PricedLine } | { kind: "line_removed"; name: string } | { kind: "fulfillment"; value: Fulfillment }
   | { kind: "address"; text: string } | { kind: "tip"; cents: number } | { kind: "noted"; notes: string[] } | { kind: "line_progress"; name: string; picks: string[] }
-  | { kind: "pending"; items: Array<{ qty: number; span: string }> };
+  | { kind: "pending"; items: Array<{ qty: number; span: string }> } | { kind: "gotcha" };
 
 export type Decline = { code: DeclineCode | "dropped_line" | "address_to_pickup" | "tip_zero" | "checkout_failed"; span?: string };
 
 export type Info =
-  | { kind: "cart"; totals: Totals } | { kind: "item"; item: MenuItem; unit_cents: number; sizes?: Array<{ name: string; cents: number }>; price: boolean }
+  | { kind: "cart"; totals: Totals } | { kind: "item"; item: MenuItem; unit_cents: number; sizes?: Array<{ name: string; cents: number }>; price: boolean; answer?: boolean }
+  | { kind: "cart_has"; qty: number; name: string } | { kind: "cart_lacks"; name: string }
   | { kind: "list"; names: string[] } | { kind: "categories"; names: string[] } | { kind: "not_found"; about: string }
   | { kind: "human" } | { kind: "cancelled" } | { kind: "started_over" } | { kind: "unclear" };
 
@@ -58,7 +59,7 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
     case "items": return form.lines.length === 0 ? T.itemsEmpty(count) : T.itemsMore(count);
     case "tip": return T.tip(count);
     case "confirm": return T.confirmAsk(count);
-    case "omission": return T.omission(q.spans.map((sp) => { const o = form.omissions.find((x) => x.span === sp); return o && o.qty > 1 ? `${o.qty} ${sp}` : sp; }));
+    case "omission": return q.spans.every((sp) => form.omissions.find((x) => x.span === sp)?.offer) ? T.offer(q.spans.length) : T.omission(q.spans.map((sp) => { const o = form.omissions.find((x) => x.span === sp); return o && o.qty > 1 ? `${o.qty} ${sp}` : sp; }));
     case "line_unresolved": {
       const l = form.lines.find((x) => x.line_id === q.line_id);
       return T.lineUnresolved(l?.span ?? "that", count);
@@ -137,6 +138,7 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
   for (const a of plan.acks) {
     if (a.kind === "noted") parts.push(T.ackNoted(a.notes));
     if (a.kind === "line_progress") parts.push(T.ackProgress(a.picks, a.name));
+    if (a.kind === "gotcha") parts.unshift(T.gotcha());
     if (a.kind === "pending") parts.push(T.ackPending(a.items.map((i) => (i.qty > 1 ? `${i.qty} ${i.span}` : i.span))));
   }
 
@@ -156,7 +158,9 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
       const sizes = i.sizes ? sortSizes(i.sizes.map((x) => x.name)) : null;
       const money = !i.price ? null : sizes ? sizes.map((n) => `${title(n)} ${dollars(i.sizes!.find((x) => x.name === n)!.cents)}`).join(", ") : dollars(i.unit_cents);
       if (sizes && !i.price) opts.unshift(`Sizes: ${sizes.map(title).join(", ")}`);
-      parts.push(T.itemInfo(sizes ? title(i.item.facets.kind ?? i.item.display_name) : i.item.display_name, money, opts, i.item.description));
+      parts.push((i.answer ? T.yesWeHave() + " " : "") + T.itemInfo(sizes ? title(i.item.facets.kind ?? i.item.display_name) : i.item.display_name, money, opts, i.item.description));
+    } else if (i.kind === "cart_has") parts.push(T.cartHas(i.qty, i.name));
+    else if (i.kind === "cart_lacks") { parts.push(T.cartLacks(i.name));
     } else if (i.kind === "list") parts.push(T.listInfo(i.names)); // the template caps long lists and says how many more
     else if (i.kind === "categories") parts.push(T.menuCategories(i.names));
     else if (i.kind === "not_found") parts.push(T.notOnMenu(i.about));
@@ -171,7 +175,7 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
     if (q.kind === "open") parts.push(renderQuestion(q.open, q.count, form, menu, q.heard));
     else if (q.kind === "readback") {
       parts.push([
-        T.readbackHeader(form.fulfillment, form.address?.formatted ?? form.address?.text ?? null),
+        T.readbackHeader(form.fulfillment, form.address?.formatted ?? form.address?.text ?? null, !form.said_robot),
         ...receiptRows(q.totals).map((r, k) => `${k + 1}) ${r}`),
         moneyLine(q.totals),
         T.confirmAsk(q.count),
@@ -180,7 +184,9 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
       parts.push(`${T.handoff(q.url)} ${T.afterPay(form.fulfillment === "delivery")}`.trim());
     }
   }
-  return parts.join("\n\n").trim();
+  // short one-line parts read as one message ("Added 1 × Garlic Knots. Anything else?"); anything with a list keeps its own block
+  const short = parts.every((x) => !x.includes("\n")) && parts.join(" ").length <= 220;
+  return parts.join(short ? " " : "\n\n").trim();
 }
 
 export { GROUP_PROMPTS, orList };

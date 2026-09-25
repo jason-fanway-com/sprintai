@@ -945,7 +945,7 @@ Deno.test("tester pass 2: two identical lines never ask 'which one do you mean';
   f = say(f, "pickup").form;
   let o = say(f, "garlic knots", [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
   o = say(o.form, "another garlic knots", [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
-  assertEquals(o.form.lines.length, 2);
+  assertEquals(o.form.lines.map((l) => l.qty), [2]); // identical lines merge (2026-09-25)
   o = say(o.form, "make the knots 3", [{ kind: "change_line", ref: { span: "knots" }, qty: 3 }]);
   assert(!o.reply.includes("Which one do you mean"), o.reply);
   let p = say(f, "a cup of lobster bisque and garlic knots", [{ kind: "add_line", item_span: "cup of lobster bisque", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
@@ -1229,7 +1229,7 @@ Deno.test("tester pass 7: 'a medium and large' are two sizes; a size change swap
   let o = say(f, "a medium and large cheese pizza", [{ kind: "add_line", item_span: "cheese pizza", qty: 1, option_spans: ["medium"] }, { kind: "add_line", item_span: "cheese pizza", qty: 1, option_spans: ["large"] }]);
   assertEquals(o.form.lines.map((l) => l.item_id).sort(), [IDS.cheesePizzaL, IDS.cheesePizzaM].sort(), o.reply);
   o = say(o.form, "make the large a medium", [{ kind: "change_line", ref: { span: "large cheese pizza" }, add_option_spans: ["medium"], remove_option_spans: [] }]);
-  assertEquals(o.form.lines.map((l) => l.item_id), [IDS.cheesePizzaM, IDS.cheesePizzaM], o.reply);
+  assertEquals(o.form.lines.map((l) => [l.item_id, l.qty]), [[IDS.cheesePizzaM, 2]], o.reply); // two identical mediums merge
   assertEquals(o.form.lines.flatMap((l) => l.notes), []);
   let p = say(f, "house salad", [{ kind: "add_line", item_span: "house salad", qty: 1, option_spans: [] }]);
   p = say(p.form, "ranch, italian, bleu cheese", [{ kind: "answer_option", value_span: "ranch, italian, bleu cheese" }]);
@@ -1337,12 +1337,12 @@ Deno.test("ask, don't guess: the read-back says a robot built it and takes corre
   assertStringIncludes(o.reply, "Reply YES if that's right");
   o = say(o.form, "actually make it 2 cheesesteaks and drop the knots", [{ kind: "change_line", ref: { span: "cheesesteaks" }, qty: 2, add_option_spans: [], remove_option_spans: [] }, { kind: "remove_line", ref: { span: "knots" } }]);
   assertEquals(o.form.lines.map((l) => [l.item_id, l.qty]), [[IDS.cheesesteak, 2]], o.reply);
-  assertStringIncludes(o.reply, "Here's what I have"); // corrected, and read back again for a fresh YES
+  assertStringIncludes(o.reply, "Here's the updated order for pickup:"); // corrected, and read back again for a fresh YES (the robot line only once)
   o = say(o.form, "yes");
   assert(!o.reply.includes("Here's what I have"), o.reply); // confirmed: on to the payment link
   o = say(o.form, "wait add garlic knots too", [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
   assertEquals(o.form.lines.length, 2, o.reply);
-  assertStringIncludes(o.reply, "Here's what I have"); // a change after the link re-shows the read-back, never charges silently
+  assertStringIncludes(o.reply, "Here's the updated order for pickup:"); // a change after the link re-shows the read-back, never charges silently
 });
 
 Deno.test("ask, don't guess: a re-ask names what we heard; two answers to one slot ask between them; an unreadable answer is never a kitchen note", () => {
@@ -1362,5 +1362,43 @@ Deno.test("ask, don't guess: a re-ask names what we heard; two answers to one sl
   assertEquals(p.form.lines[0].status.kind, "needs_slot", p.reply); // conflicting reads in one turn ask, never last-one-wins
   assertStringIncludes(p.reply, "Italian");
   assertStringIncludes(p.reply, "Ranch");
+});
+
+Deno.test("finer touches: identical lines merge, 'take one off' lowers the count, the robot line is said once, short parts read as one message", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "garlic knots", [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
+  assertStringIncludes(o.reply, "Added 1 × Garlic Knots (6). Anything else?"); // one line, not a printout
+  o = say(o.form, "add two more garlic knots", [{ kind: "add_line", item_span: "garlic knots", qty: 2, option_spans: [] }]);
+  assertEquals(o.form.lines.map((l) => [l.item_id, l.qty]), [[IDS.knots, 3]], o.reply);
+  o = say(o.form, "ok thats one too many, take one off", [{ kind: "remove_line", ref: { span: "garlic knots" } }]);
+  assertEquals(o.form.lines.map((l) => [l.item_id, l.qty]), [[IDS.knots, 2]], o.reply);
+  o = say(o.form, "thats it");
+  assertStringIncludes(o.reply, "I'm a robot");
+  o = say(o.form, "add a cheesesteak", [{ kind: "add_line", item_span: "cheesesteak", qty: 1, option_spans: [] }]);
+  assertStringIncludes(o.reply, "Here's the updated order");
+  assert(!o.reply.includes("robot"), o.reply);
+});
+
+Deno.test("finer touches: 'do you have X?' is answered and offered; 'did you add X?' is answered from the cart; a taught word gets 'oh, gotcha'", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "yes do you have garlic knots?", [{ kind: "ask_menu", about_span: "garlic knots" }]);
+  assertStringIncludes(o.reply, "Yes, we do.");
+  assertStringIncludes(o.reply, "Want one?");
+  assert(!o.reply.includes("Did you also want"), o.reply);
+  assertEquals(o.form.lines.length, 0);
+  o = say(o.form, "yes");
+  assertEquals(o.form.lines.map((l) => l.item_id), [IDS.knots], o.reply);
+  o = say(o.form, "did you add the garlic knots?");
+  assertStringIncludes(o.reply, "Yes, 1 × Garlic Knots (6) is on your order.");
+  assert(!o.reply.includes("Did you also want"), o.reply);
+  assertEquals(o.form.lines.length, 1);
+  let p = say(f, "add two zorgblats", [{ kind: "add_line", item_span: "zorgblats", qty: 2, option_spans: [] }]);
+  assertStringIncludes(p.reply, "couldn't find");
+  p = say(p.form, "oh sorry, that means garlic knots", [{ kind: "remove_line", ref: { span: "zorgblats" } }, { kind: "add_line", item_span: "garlic knots", qty: 2, option_spans: [] }]);
+  assertStringIncludes(p.reply, "Oh, gotcha.");
+  assert(!p.reply.includes("leave"), p.reply);
+  assertEquals(p.form.lines.map((l) => [l.item_id, l.qty]), [[IDS.knots, 2]]);
 });
 

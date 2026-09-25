@@ -74,8 +74,13 @@ export const T = {
     `Reply YES to get your payment link, or NO to change something.`,
   ][Math.min(c, 2)],
   // Jason, 2026-09-24: the customer's confirmation is the final safeguard; say plainly that a robot built this
-  readbackHeader: (f: "pickup" | "delivery" | null, address: string | null) =>
-    `Just to be sure I got everything right (I'm a robot, and I do make mistakes). Here's what I have for ${f === "delivery" && address ? `delivery to ${address}` : "pickup"}:`,
+  readbackHeader: (f: "pickup" | "delivery" | null, address: string | null, first = true) =>
+    `${first ? "Just to be sure I got everything right (I'm a robot, and I do make mistakes). Here's what I have" : "Here's the updated order"} for ${f === "delivery" && address ? `delivery to ${address}` : "pickup"}:`,
+  gotcha: () => `Oh, gotcha.`,
+  yesWeHave: () => `Yes, we do.`,
+  offer: (n: number) => n > 1 ? `Want to add them?` : `Want one?`,
+  cartHas: (qty: number, name: string) => `Yes, ${qty > 1 ? `${qty} × ${name} are` : `1 × ${name} is`} on your order.`,
+  cartLacks: (name: string) => `No ${name} on your order yet.`,
   missed: (heard: string, what: string) => `Sorry, I didn't catch "${heard}" as ${what}.`,
   moneyLine: (parts: string[]) => parts.join(" · "),
   handoff: (url: string | null) => (url ? `Pay here: ${url}` : `I couldn't create your payment link just now.`),

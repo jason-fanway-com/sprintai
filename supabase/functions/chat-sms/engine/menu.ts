@@ -6,93 +6,20 @@
 import { findWordRun, normalize, singular, words } from "./normalize.ts";
 
 export interface MenuChoice { id: string; name: string; delta_cents: number; words: string[] }
-export interface MenuGroup {
-  id: string;
-  name: string;
-  kind: "slot" | "modifier";
-  max_select: number;
-  choices: MenuChoice[];
-  /** compiler's ask mode: ask | apply_default | auto_single | offer_once | on_request */
-  ask_mode: string;
-  default_choice_id: string | null;
-}
+export interface MenuGroup { id: string; name: string; kind: "slot" | "modifier"; max_select: number; choices: MenuChoice[]; /** compiler's ask mode: ask | apply_default | auto_single | offer_once | on_request */ ask_mode: string; default_choice_id: string | null }
 export interface Facets { kind: string | null; size: string | null }
 export interface BundleDef { count: number; unit: string; choices: MenuChoice[] }
-export interface MenuItem {
-  id: string;
-  name: string;
-  display_name: string;
-  description: string | null;
-  category: string | null;
-  base_cents: number;
-  groups: MenuGroup[];
-  facets: Facets;
-  orderable: boolean;
-  derived_from: { base_item_id: string; choice_ids: string[] } | null;
-  words: string[];
-  /** "Garlic Knots (6)", "Wings Bone-In - 10 Pieces": how many units one order holds */
-  piece_count: number | null;
-  /** a fixed-price assortment: `count` picks from `choices` ("one dozen bagels") */
-  bundle: BundleDef | null;
-}
-export interface LexiconEntry {
-  term: string;
-  target_type: "item" | "choice" | "category" | string;
-  target_id: string;
-}
+export interface MenuItem { id: string; name: string; display_name: string; description: string | null; category: string | null; base_cents: number; groups: MenuGroup[]; facets: Facets; orderable: boolean; derived_from: { base_item_id: string; choice_ids: string[] } | null; words: string[]; /** "Garlic Knots (6)", "Wings Bone-In - 10 Pieces": how many units one order holds */ piece_count: number | null; /** a fixed-price assortment: `count` picks from `choices` ("one dozen bagels") */ bundle: BundleDef | null }
+export interface LexiconEntry { term: string; target_type: "item" | "choice" | "category" | string; target_id: string }
 export interface IndexedTerm { words: string[]; wordsSing: string[]; target_id: string; target_type: string }
 
-export interface Menu {
-  version: string;
-  items: Map<string, MenuItem>;
-  /** item terms, longest first */
-  itemTerms: IndexedTerm[];
-  categoryTerms: IndexedTerm[];
-  /** `${base_item_id}|${choice_id}` -> derived item id */
-  canon: Map<string, string>;
-  /** every lexicon word that names an item, by item id (for "what's left over in the span") */
-  termWordsByItem: Map<string, Set<string>>;
-  /** every word of every item or category term: the spelling universe a typo is measured against */
-  vocab: Set<string>;
-  shop: ShopConfig;
-}
+export interface Menu { version: string; items: Map<string, MenuItem>; /** item terms, longest first */ itemTerms: IndexedTerm[]; categoryTerms: IndexedTerm[]; /** `${base_item_id}|${choice_id}` -> derived item id */ canon: Map<string, string>; /** every lexicon word that names an item, by item id (for "what's left over in the span") */ termWordsByItem: Map<string, Set<string>>; /** every word of every item or category term: the spelling universe a typo is measured against */ vocab: Set<string>; shop: ShopConfig }
 
-export interface ShopConfig {
-  shop_id: string;
-  name: string;
-  delivery_enabled: boolean;
-  delivery_fee_cents: number;
-  tax_rate_bps: number;
-  service_fee_cents: number;
-  phone_display: string | null;
-  /** field order for asking; data, not code */
-  ask_order: Array<"fulfillment" | "address" | "items" | "tip" | "confirm">;
-}
+export interface ShopConfig { shop_id: string; name: string; delivery_enabled: boolean; delivery_fee_cents: number; tax_rate_bps: number; service_fee_cents: number; phone_display: string | null; /** field order for asking; data, not code */ ask_order: Array<"fulfillment" | "address" | "items" | "tip" | "confirm"> }
 
 // ── Raw row shapes (what the DB / existing loaders hand us) ─────────────────
-export interface RawAskPlanStep {
-  group_id: string;
-  slot_key: string | null;
-  kind: "slot" | "modifier";
-  ask_mode?: string;
-  prompt_template?: string;
-  choices: Array<{ id: string; display: string; price_delta_cents: number }>;
-}
-export interface RawMenuItem {
-  id: string;
-  name: string;
-  display_name?: string | null;
-  description?: string | null;
-  category?: string | null;
-  price_cents: number;
-  bot_state?: string | null;
-  size_label?: string | null;
-  is_derived?: boolean | null;
-  derived_from?: { base_item_id: string; choice_ids: string[] } | null;
-  ask_plan?: { base_price_cents?: number; display_name?: string; steps?: RawAskPlanStep[]; compiled_at?: string } | null;
-  meta?: { bundle?: { count: number; category: string; unit?: string } } | null;
-  option_groups?: Array<{ id: string; name: string; max_select?: number | null; default_choice_id?: string | null }> | null;
-}
+export interface RawAskPlanStep { group_id: string; slot_key: string | null; kind: "slot" | "modifier"; ask_mode?: string; prompt_template?: string; choices: Array<{ id: string; display: string; price_delta_cents: number }> }
+export interface RawMenuItem { id: string; name: string; display_name?: string | null; description?: string | null; category?: string | null; price_cents: number; bot_state?: string | null; size_label?: string | null; is_derived?: boolean | null; derived_from?: { base_item_id: string; choice_ids: string[] } | null; ask_plan?: { base_price_cents?: number; display_name?: string; steps?: RawAskPlanStep[]; compiled_at?: string } | null; meta?: { bundle?: { count: number; category: string; unit?: string } } | null; option_groups?: Array<{ id: string; name: string; max_select?: number | null; default_choice_id?: string | null }> | null }
 
 const SIZE_WORDS = new Set(["small", "medium", "large", "xlarge", "personal", "sheet", "cup", "bowl", "half", "whole", "regular"]);
 const NAME_SIZE_RE = /^(.*?)\s*[-–(]\s*(small|medium|large|x-?large|extra large|personal|sheet|cup|bowl|regular)\b.*$/i;
