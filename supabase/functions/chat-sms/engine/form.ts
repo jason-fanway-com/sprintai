@@ -190,7 +190,7 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: LineMatc
 
   const targetLine = (m: Move & { kind: "change_line" | "remove_line" }): Line | null => { // the one line a change/remove refers to; records a decline or a which-one question and returns null otherwise
     const ids = resolveRef(m.ref);
-    if (ids.length === 0) { declines.push({ code: "no_such_line", span: "span" in m.ref ? m.ref.span : undefined }); return null; }
+    if (ids.length === 0) { if (!("span" in m.ref && removed.some((r) => isWordSubset(words(m.ref.span as string), words(r.span))))) declines.push({ code: "no_such_line", span: "span" in m.ref ? m.ref.span : undefined }); return null; } // already gone this same message: nothing to say
     if (ids.length > 1) { refAsk = { candidates: ids, pending: m }; return null; }
     reopenIfConfirmed();
     return form.lines.find((l) => l.line_id === ids[0])!;

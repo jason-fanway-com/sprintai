@@ -331,11 +331,11 @@ export function turn(input: TurnInput): TurnOutput {
   const agg = new Map<string, number>(); for (const l of pending) { const k = l.item_id ? menu.items.get(l.item_id)!.display_name : l.span; agg.set(k, (agg.get(k) ?? 0) + l.qty); } // resolved lines by name; "fries and fries" -> "3 fries"
   if (pending.length) acks.push({ kind: "pending", items: [...agg].map(([span, qty]) => ({ qty, span })) });
   // a word we did not know that this turn became an item, by any path ("glizzies" answered, replaced, or removed beside "hot dog"), is learned: "oh, gotcha"
-  const taught = new Set<string>(), fresh = form.lines.filter((l) => newIds.has(l.line_id) && l.item_id);
+  const mergedInto = (id: number) => { const e = [...res.ledger, ...ledger].find((x) => x.event === "lines_merged" && (x.data as { from: number }).from === id); return e ? form.lines.find((l) => l.line_id === (e.data as { into: number }).into) : undefined; };
+  const taught = new Set<string>(), fresh = [...new Set([...newIds].map((id) => (form.lines.find((l) => l.line_id === id) ?? mergedInto(id))?.item_id).filter((x): x is string => !!x))];
   for (const [id, json] of before) {
     const was = JSON.parse(json) as Line; if (was.item_id || was.status.kind !== "unresolved") continue;
-    const merged = res.ledger.find((e) => e.event === "lines_merged" && (e.data as { from: number }).from === id) ?? ledger.find((e) => e.event === "lines_merged" && (e.data as { from: number }).from === id);
-    const item = form.lines.find((l) => l.line_id === id)?.item_id ?? (merged ? form.lines.find((l) => l.line_id === (merged.data as { into: number }).into)?.item_id : fresh.length === 1 && res.removed.some((r) => r.line_id === id) ? fresh[0].item_id : null);
+    const item = form.lines.find((l) => l.line_id === id)?.item_id ?? mergedInto(id)?.item_id ?? (fresh.length === 1 && res.removed.some((r) => r.line_id === id) ? fresh[0] : null);
     if (item) { taught.add(was.span); ledger.push({ turn: t, event: "taught_term", data: { span: was.span, item_id: item } }); }
   }
   if (taught.size) acks.push({ kind: "gotcha" });
