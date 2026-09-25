@@ -37,3 +37,21 @@ ticket; oddities are logged. No tester pass runs without Jason's count-and-cost 
 
 Leftover span words that match a paid add-on ("burger with bacon" as one span) still apply; the read-back is the
 backstop. A question type for "did you want X (+$2)?" is a later decision.
+
+## Landed 2026-09-25 (v648–v654)
+
+Rules 1–6 above, plus Jason's finer touches after his phone test that morning: identical lines merge into one ticket
+row; "take one off" lowers a count instead of dropping the line; the robot line is said once per conversation, then
+"Here's the updated order"; "do you have hot dogs?" is answered ("Yes, we do. Hot Dog: served with fries. Want one?")
+and YES adds it; "did you add a hot dog?" is answered from the cart even when the model shrugs; an unknown word the
+customer explains ("glizzies means hot dog") gets "Oh, gotcha", the count carries over, and the word is saved to the
+shop's lexicon (provenance stated, evidence source customer) so the next customer is understood; short replies read
+as one message instead of a blank-line printout. Verified live: a second conversation's "two glizzies please" added
+two hot dogs.
+
+## Next: the voice layer
+
+The engine builds the same plan; a small model call writes it as one or two natural sentences in the shop's voice; the
+engine validates the output (every number and item name from the plan, no new ones, the question intact, no times or
+promises) and falls back to the template when the check fails. Lists (the read-back, numbered choices) stay lists.
+
