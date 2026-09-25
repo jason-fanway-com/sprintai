@@ -330,12 +330,16 @@ export function turn(input: TurnInput): TurnOutput {
   const pending = form.lines.filter((l) => newIds.has(l.line_id) && l.status.kind !== "complete" && l.line_id !== focusId);
   const agg = new Map<string, number>(); for (const l of pending) { const k = l.item_id ? menu.items.get(l.item_id)!.display_name : l.span; agg.set(k, (agg.get(k) ?? 0) + l.qty); } // resolved lines by name; "fries and fries" -> "3 fries"
   if (pending.length) acks.push({ kind: "pending", items: [...agg].map(([span, qty]) => ({ qty, span })) });
-  for (const r of res.removed) {
-    const it = r.item_id ? menu.items.get(r.item_id) : null, taught = !it && batch.find((m) => m.kind === "add_line");
-    if (it) acks.push({ kind: "line_removed", name: it.display_name });
-    else if (taught && taught.kind === "add_line") { acks.push({ kind: "gotcha" }); ledger.push({ turn: t, event: "taught_term", data: { span: r.span, means: taught.item_span, item_id: form.lines.find((l) => newIds.has(l.line_id) && l.item_id && lineMatchesSpan(l, taught.item_span, menu))?.item_id ?? null } }); } // "oh sorry, glizzies means hot dog": a replacement, and a word to remember
-    else declines.push({ code: "dropped_line", span: r.span });
+  // a word we did not know that this turn became an item, by any path ("glizzies" answered, replaced, or removed beside "hot dog"), is learned: "oh, gotcha"
+  const taught = new Set<string>(), fresh = form.lines.filter((l) => newIds.has(l.line_id) && l.item_id);
+  for (const [id, json] of before) {
+    const was = JSON.parse(json) as Line; if (was.item_id || was.status.kind !== "unresolved") continue;
+    const merged = res.ledger.find((e) => e.event === "lines_merged" && (e.data as { from: number }).from === id) ?? ledger.find((e) => e.event === "lines_merged" && (e.data as { from: number }).from === id);
+    const item = form.lines.find((l) => l.line_id === id)?.item_id ?? (merged ? form.lines.find((l) => l.line_id === (merged.data as { into: number }).into)?.item_id : fresh.length === 1 && res.removed.some((r) => r.line_id === id) ? fresh[0].item_id : null);
+    if (item) { taught.add(was.span); ledger.push({ turn: t, event: "taught_term", data: { span: was.span, item_id: item } }); }
   }
+  if (taught.size) acks.push({ kind: "gotcha" });
+  for (const r of res.removed) { const it = r.item_id ? menu.items.get(r.item_id) : null; if (it) acks.push({ kind: "line_removed", name: it.display_name }); else if (!taught.has(r.span)) declines.push({ code: "dropped_line", span: r.span }); }
 
   let info: Info | null = null;
   if (res.showCart) info = { kind: "cart", totals: totals(form, menu) };

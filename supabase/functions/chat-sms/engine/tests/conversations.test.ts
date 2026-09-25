@@ -1400,5 +1400,14 @@ Deno.test("finer touches: 'do you have X?' is answered and offered; 'did you add
   assertStringIncludes(p.reply, "Oh, gotcha.");
   assert(!p.reply.includes("leave"), p.reply);
   assertEquals(p.form.lines.map((l) => [l.item_id, l.qty]), [[IDS.knots, 2]]);
+  assertEquals(p.ledger.filter((e) => e.event === "taught_term").map((e) => (e.data as { span: string; item_id: string }).item_id), [IDS.knots]);
+  // the live model shape: a no-op change on the unknown line plus the add, which the engine reads as the answer; and the plain answer shape
+  for (const moves of [[{ kind: "change_line", ref: { span: "zorgblats" }, qty: null, add_option_spans: [], remove_option_spans: [] }, { kind: "add_line", item_span: "garlic knots", qty: 2, option_spans: [] }], [{ kind: "answer_option", value_span: "garlic knots" }]] as Move[][]) {
+    let q = say(f, "a hot dog and two zorgblats", [{ kind: "add_line", item_span: "zorgblats", qty: 2, option_spans: [] }]);
+    q = say(q.form, "oh sorry, that means garlic knots", moves);
+    assertStringIncludes(q.reply, "Oh, gotcha.");
+    assertEquals(q.ledger.filter((e) => e.event === "taught_term").map((e) => (e.data as { span: string }).span), ["zorgblats"], q.reply);
+    assertEquals(q.form.lines.map((l) => l.item_id), [IDS.knots], q.reply);
+  }
 });
 
