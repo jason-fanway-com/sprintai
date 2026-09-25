@@ -49,9 +49,18 @@ shop's lexicon (provenance stated, evidence source customer) so the next custome
 as one message instead of a blank-line printout. Verified live: a second conversation's "two glizzies please" added
 two hot dogs.
 
-## Next: the voice layer
+## The voice layer (landed v655–v657)
 
-The engine builds the same plan; a small model call writes it as one or two natural sentences in the shop's voice; the
-engine validates the output (every number and item name from the plan, no new ones, the question intact, no times or
-promises) and falls back to the template when the check fails. Lists (the read-back, numbered choices) stay lists.
+The engine builds the same plan and renders the same draft. `voice.ts` (the third and last model adapter) asks Haiku to
+say the draft the way the person at the counter would; `normalize.faithfulRewrite` then checks the rewrite against the
+draft (every number, digits or words, survives and none appears; every mid-sentence name survives and none appears,
+plurals allowed; the question stays; no wait times or contact promises; a length cap) and the runner adds one more check
+with the menu itself (a menu item the draft never named is invented, whatever its casing). Any doubt, timeout (2.5 s) or
+failure sends the draft. Lists, links and long read-backs are never voiced. `ENGINE_VOICE=off` kills it without a deploy;
+`ENGINE_VOICE_MODEL` swaps the model. Every turn logs `voice_rephrased` or `voice_kept_draft` with the reason, so the
+checker's false rejections can be read and fixed from data. Cost: about a twentieth of a cent per turn; latency +0.8–1.5 s.
+
+Live on v656, Jason's own conversation replayed:
+"Yeah we got hot dogs, they come with fries. You want one?" / "Got you down for 1 hot dog. Anything else?" /
+"Yep, we got the 1 Hot Dog on there. Anything else or are we all set?"
 

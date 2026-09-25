@@ -1433,5 +1433,6 @@ Deno.test("voice: a rewrite must keep every number and name, keep the question, 
   assertEquals(faithfulRewrite("Chicken Parmesan Sandwich: what bread? White, Rye, or Wheat?", "What bread for the Chicken Parmesan Sandwich? White or Wheat?"), "dropped rye");
   assertEquals(faithfulRewrite("Anything else?", "Anything else? It'll be ready in 15 minutes."), "invented 15");
   assertEquals(faithfulRewrite("Yes, we do. Hot Dog: Served with fries. Want one?", "Yeah we do, the Hot Dog comes with fries. You want one?"), null); // "Served" after the colon is scaffolding
+  assertEquals(faithfulRewrite("Updated: 3 × Hot Dog. Anything else?", "Got it, so that's 3 Hot Dogs total now. Anything else?"), null); // a plural of a name is the name
 });
 

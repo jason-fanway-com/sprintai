@@ -132,7 +132,8 @@ export function faithfulRewrite(draft: string, text: string): string | null {
   for (const n of tn) if (!dn.includes(n)) return `invented ${n}`;
   const dNames = names(draft), tNames = names(text), low = text.toLowerCase();
   for (const n of dNames) if (!low.includes(n)) return `dropped ${n}`;
-  for (const n of tNames) if (!draft.toLowerCase().includes(n)) return `invented ${n}`;
+  const dl = draft.toLowerCase(), plural = (n: string) => dl.includes(n) || dl.includes(n.replace(/(e?s)$/, "")) || dl.includes(n.replace(/(ie)s$/, "y")); // "3 Hot Dogs" says "Hot Dog"
+  for (const n of tNames) if (!plural(n)) return `invented ${n}`;
   if (draft.includes("?") && !text.includes("?")) return "lost the question";
   if (talkClaimsTime(text) && !talkClaimsTime(draft)) return "invented a time";
   if (/\b(text|call|notify|message|ping)\b.*\b(you|when|once)\b/i.test(text)) return "promised contact";
