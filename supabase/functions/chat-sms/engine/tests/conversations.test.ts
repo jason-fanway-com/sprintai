@@ -1462,3 +1462,20 @@ Deno.test("phone test 09-26: a change after the pay link sends the updated order
   assertStringIncludes(p.reply, "earlier link won't work");
 });
 
+Deno.test("end-of-order edits: a tip change after the link remakes the link; 'swap X for Y' with only an empty change from the model swaps the line", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "delivery").form; f = say(f, "123 Main St", [addr("123 Main St")]).form;
+  let o = say(f, "garlic knots", [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
+  o = say(o.form, "thats it"); o = say(o.form, "0"); o = say(o.form, "yes");
+  assertEquals(o.form.status, "awaiting_payment");
+  o = say(o.form, "actually make the tip 20%", [{ kind: "answer", field: "tip", value: { kind: "percent", value: 20 } }]);
+  assert(o.ledger.some((e) => e.event === "relink_after_change"), o.reply);
+  assertStringIncludes(o.reply, "earlier link won't work");
+  assertEquals(o.form.tip, { kind: "percent", value: 20 });
+  let p = say(newForm("vitos", "test-v1"), "pickup").form;
+  let q = say(p, "a cheesesteak", [{ kind: "add_line", item_span: "cheesesteak", qty: 1, option_spans: [] }]);
+  q = say(q.form, "swap the cheesesteak for garlic knots", [{ kind: "change_line", ref: { span: "cheesesteak" }, qty: null, add_option_spans: [], remove_option_spans: [] }]);
+  assertEquals(q.form.lines.map((l) => l.item_id), [IDS.knots], q.reply);
+  assert(q.ledger.some((e) => e.event === "swap_line"));
+});
+

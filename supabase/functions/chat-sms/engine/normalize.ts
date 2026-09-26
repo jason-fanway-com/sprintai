@@ -127,18 +127,12 @@ export function faithfulRewrite(draft: string, text: string): string | null {
   const WORDS: Record<string, string> = { one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9", ten: "10", eleven: "11", twelve: "12" };
   const nums = (s: string) => (s.toLowerCase().replace(/\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/g, (w) => WORDS[w]).match(/\$?\d+(?:\.\d+)?/g) ?? []).map((n) => n.replace(/^\$/, "")).filter((n) => n !== "1"); // "two hot dogs" is 2; "a hot dog" may drop the 1
   const names = (s: string) => new Set((s.replace(/(^|[.?!:]\s+)([A-Z])/g, (_m, a, b) => `${a}${b.toLowerCase()}`).match(/\b[A-Z][A-Za-z'&-]+(?:\s+[A-Z][A-Za-z'&-]+)*/g) ?? []).map((x) => x.toLowerCase()));
-  const dn = nums(draft), tn = nums(text);
-  for (const n of dn) if (!tn.includes(n)) return `dropped ${n}`;
-  for (const n of tn) if (!dn.includes(n)) return `invented ${n}`;
-  const dNames = names(draft), tNames = names(text), low = text.toLowerCase();
-  for (const n of dNames) if (!low.includes(n)) return `dropped ${n}`;
-  const dl = draft.toLowerCase(), plural = (n: string) => dl.includes(n) || dl.includes(n.replace(/(e?s)$/, "")) || dl.includes(n.replace(/(ie)s$/, "y")); // "3 Hot Dogs" says "Hot Dog"
-  for (const n of tNames) if (!plural(n)) return `invented ${n}`;
-  if (draft.includes("?") && !text.includes("?")) return "lost the question";
-  if (talkClaimsTime(text) && !talkClaimsTime(draft)) return "invented a time";
-  if (/\b(text|call|notify|message|ping)\b.*\b(you|when|once)\b/i.test(text)) return "promised contact";
-  if (text.length > draft.length * 1.6 + 60) return "too long";
-  return null;
+  const dn = nums(draft), tn = nums(text), low = text.toLowerCase(), dl = draft.toLowerCase();
+  const plural = (n: string) => dl.includes(n) || dl.includes(n.replace(/(e?s)$/, "")) || dl.includes(n.replace(/(ie)s$/, "y")); // "3 Hot Dogs" says "Hot Dog"
+  const lost = dn.find((n) => !tn.includes(n)) ?? [...names(draft)].find((n) => !low.includes(n)), made = tn.find((n) => !dn.includes(n)) ?? [...names(text)].find((n) => !plural(n));
+  if (lost) return `dropped ${lost}`; if (made) return `invented ${made}`;
+  if (draft.includes("?") && !text.includes("?")) return "lost the question"; if (talkClaimsTime(text) && !talkClaimsTime(draft)) return "invented a time";
+  return /\b(text|call|notify|message|ping)\b.*\b(you|when|once)\b/i.test(text) ? "promised contact" : text.length > draft.length * 1.6 + 60 ? "too long" : null;
 }
 
 /** "5620 Cetronia Rd, Allentown, PA 18106, USA" as a person would text it: without the country. */

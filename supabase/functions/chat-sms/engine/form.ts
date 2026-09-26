@@ -206,6 +206,7 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: LineMatc
     switch (m.kind) {
       case "answer": {
         if (m.field === "fulfillment") {
+          if (form.fulfillment !== m.value) reopenIfConfirmed(); // pickup <-> delivery changes the fee
           form.fulfillment = m.value;
           if (m.value === "pickup") { form.address = null; form.tip = form.tip ?? null; }
           ledger.push({ turn: t, event: "answer", data: { field: "fulfillment", value: m.value } });
@@ -223,7 +224,7 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: LineMatc
           const v = m.value;
           const bad = (v.kind === "percent" && (v.value < 0 || v.value > 100)) || (v.kind === "cents" && (v.value < 0 || v.value > 50000));
           if (bad) declines.push({ code: "tip_out_of_range" });
-          else form.tip = v;
+          else { if (JSON.stringify(form.tip) !== JSON.stringify(v)) reopenIfConfirmed(); form.tip = v; } // a new tip after the link is a new total: the link must be remade
           ledger.push({ turn: t, event: "answer", data: { field: "tip", value: v, accepted: !bad } });
         } else if (m.field === "items_done") {
           form.items_done = true;
