@@ -98,11 +98,12 @@ nav {
 
 /* ── BIG NUMBER ── */
 .big-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 48px; }
-.big-num { font-family: var(--font-d); font-size: 56px; font-weight: 800; color: var(--brand); line-height: 1; }
+.big-num { font-family: var(--font-d); font-size: clamp(30px, 8.5vw, 56px); font-weight: 800; color: var(--brand); line-height: 1; white-space: nowrap; }
 .big-num.good { color: var(--green); }
 .big-lbl { font-size: 16px; font-weight: 600; color: var(--navy); margin-top: 10px; }
 .big-sub { font-size: 14px; color: var(--muted); margin-top: 4px; line-height: 1.55; }
-.big-card { background: var(--warm); border: 1px solid var(--border-warm); border-radius: var(--r-lg); padding: 32px; text-align: center; }
+.big-card { background: var(--warm); border: 1px solid var(--border-warm); border-radius: var(--r-lg); padding: 32px; text-align: center; min-width: 0; }
+.big-num { overflow-wrap: break-word; }
 .big-card.featured { background: var(--green-light); border-color: var(--green-border); }
 .fine-note { margin-top: 24px; font-size: 13px; color: var(--light); line-height: 1.6; max-width: 640px; }
 
@@ -116,15 +117,97 @@ nav {
 .keeps-box a { color: var(--brand); font-weight: 600; text-decoration: none; }
 .keeps-box a:hover { text-decoration: underline; }
 
-/* ── CALCULATOR ── */
-.calc-box { background: var(--warm); border: 1px solid var(--border-warm); border-radius: var(--r-lg); padding: 24px 28px; margin-top: 32px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-.calc-box label { font-size: 14px; font-weight: 600; color: var(--navy); }
-.calc-box input {
-  width: 120px; padding: 10px 14px; border-radius: 10px; border: 1.5px solid var(--border);
-  font-size: 15px; font-family: var(--font-b); color: var(--ink);
+/* ── ORDER PICKER (single shared control) ── */
+.picker-wrap { padding: 40px 48px 0; max-width: 1140px; margin: 0 auto; }
+.picker-sentinel { height: 1px; }
+.order-picker {
+  position: sticky; top: 66px; z-index: 150;
+  background: #fff; border: 1px solid var(--border); border-radius: var(--r-lg);
+  padding: 32px 36px; box-shadow: 0 1px 3px rgba(23,33,46,.05);
+  transition: padding .25s ease, box-shadow .25s ease;
 }
-.calc-box input:focus { outline: none; border-color: var(--brand); }
-.calc-hint { font-size: 13px; color: var(--muted); }
+.order-picker.is-compact { padding: 12px 20px; box-shadow: 0 6px 20px rgba(23,33,46,.12); }
+.picker-top { display: flex; align-items: baseline; justify-content: center; gap: 10px; margin-bottom: 18px; }
+.order-picker.is-compact .picker-top { margin-bottom: 10px; }
+.picker-label { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+.picker-amount { font-family: var(--font-d); font-weight: 800; color: var(--navy); font-size: 48px; font-variant-numeric: tabular-nums; min-width: 3.5ch; text-align: center; transition: font-size .25s ease; }
+.order-picker.is-compact .picker-amount { font-size: 26px; }
+.picker-slider-row { display: flex; align-items: center; gap: 16px; max-width: 560px; margin: 0 auto; flex-wrap: wrap; justify-content: center; }
+.picker-slider { flex: 1; min-width: 160px; -webkit-appearance: none; appearance: none; height: 6px; border-radius: 4px; background: var(--brand-mid); outline: none; }
+.picker-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 24px; height: 24px; border-radius: 50%; background: var(--brand); border: 3px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.25); cursor: pointer; }
+.picker-slider::-moz-range-thumb { width: 24px; height: 24px; border-radius: 50%; background: var(--brand); border: 3px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.25); cursor: pointer; }
+.picker-slider:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+.picker-exact { display: flex; align-items: center; gap: 6px; }
+.picker-exact span { color: var(--muted); font-weight: 600; }
+.picker-exact input {
+  width: 76px; padding: 8px 10px; border-radius: 8px; border: 1.5px solid var(--border);
+  font-size: 15px; font-family: var(--font-b); color: var(--ink); font-variant-numeric: tabular-nums;
+}
+.picker-exact input:focus { outline: none; border-color: var(--brand); }
+.picker-chips { display: flex; gap: 10px; justify-content: center; margin-top: 18px; }
+.order-picker.is-compact .picker-chips { display: none; }
+.chip {
+  border: 1.5px solid var(--border); background: #fff; color: var(--navy);
+  padding: 7px 18px; border-radius: 999px; font-size: 14px; font-weight: 600;
+  cursor: pointer; font-family: var(--font-b); transition: all .15s;
+}
+.chip:hover { border-color: var(--brand); }
+.chip.active { background: var(--brand); border-color: var(--brand); color: #fff; }
+
+@media (max-width: 480px) {
+  .picker-wrap { padding: 28px 20px 0; }
+  .order-picker { padding: 20px 16px; }
+  .order-picker.is-compact { padding: 10px 14px; }
+  .picker-amount { font-size: 34px; }
+}
+
+/* ── GRAPHIC: fee bars (section a) ── */
+.fee-bars { margin-top: 36px; }
+.fee-bar-row { margin-bottom: 20px; }
+.fee-bar-row:last-child { margin-bottom: 0; }
+.fee-bar-label { display: flex; justify-content: space-between; font-size: 14px; font-weight: 600; color: var(--navy); margin-bottom: 8px; }
+.fee-bar-label .num { font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 700; min-width: 110px; text-align: right; }
+.fee-bar-track { background: var(--warm); border-radius: 999px; height: 22px; overflow: hidden; }
+.fee-bar-fill { height: 100%; border-radius: 999px; transition: width .4s ease-out; width: 0%; }
+.fee-bar-fill.apps { background: var(--brand); }
+.fee-bar-fill.ours { background: var(--green); }
+.fee-bars-caption { margin-top: 14px; font-size: 14px; color: var(--muted); text-align: center; }
+
+/* ── GRAPHIC: receipts (section b) ── */
+.receipts { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 36px; }
+.receipt { background: #fff; border: 1px solid var(--border); border-radius: var(--r-lg); padding: 24px 26px; min-width: 0; }
+.receipt.ours { background: var(--green-light); border-color: var(--green-border); }
+.receipt-title { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin-bottom: 14px; }
+.receipt-row { display: flex; justify-content: space-between; font-size: 15px; color: var(--ink); padding: 7px 0; border-bottom: 1px dashed var(--border-warm); }
+.receipt-row .val { font-variant-numeric: tabular-nums; min-width: 92px; text-align: right; }
+.receipt-row.hl { background: var(--brand-light); margin: 0 -10px; padding: 7px 10px; border-radius: 6px; border-bottom: none; }
+.receipt-row.total { font-weight: 800; color: var(--navy); border-top: 2px solid var(--border); border-bottom: none; margin-top: 6px; padding-top: 12px; }
+.receipt.ours .receipt-row.total { border-top-color: var(--green-border); }
+.diff-badge { margin-top: 20px; text-align: center; background: var(--warm); border: 1px solid var(--border-warm); border-radius: 999px; padding: 12px 20px; font-size: 15px; font-weight: 700; color: var(--brand); font-variant-numeric: tabular-nums; }
+
+@media (max-width: 640px) {
+  .receipts { grid-template-columns: 1fr; }
+}
+
+/* ── GRAPHIC: gap bar (section c) ── */
+.gap-bar-wrap { margin-top: 24px; }
+.gap-bar-track { position: relative; height: 10px; background: var(--border); border-radius: 999px; overflow: hidden; max-width: 480px; margin: 0 auto; }
+.gap-bar-fill { position: absolute; left: 0; top: 0; height: 100%; background: linear-gradient(90deg, var(--green), var(--brand)); border-radius: 999px; transition: width .4s ease-out; width: 0%; }
+.gap-bar-lbl { text-align: center; font-size: 13px; color: var(--muted); margin-top: 10px; font-variant-numeric: tabular-nums; }
+
+/* ── GRAPHIC: keeps bars (section d) ── */
+.keeps-bars { margin-top: 28px; display: flex; flex-direction: column; gap: 20px; }
+.keeps-bar-label { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 8px; }
+.keeps-bar-track { display: flex; height: 34px; border-radius: 10px; overflow: hidden; background: var(--warm); }
+.keeps-bar-seg { height: 100%; transition: width .4s ease-out; }
+.keeps-bar-seg.keep { background: var(--green); }
+.keeps-bar-seg.commission { background: var(--brand); }
+.keeps-summary { margin-top: 16px; font-size: 15px; color: var(--ink); text-align: center; font-weight: 600; }
+.keeps-summary b { font-variant-numeric: tabular-nums; color: var(--navy); }
+
+@media (prefers-reduced-motion: reduce) {
+  .fee-bar-fill, .gap-bar-fill, .keeps-bar-seg { transition: none !important; }
+}
 
 /* ── SOURCES ── */
 .sources { padding: 56px 48px 88px; max-width: 1140px; margin: 0 auto; border-top: 1px solid var(--border-warm); }
@@ -208,6 +291,32 @@ footer { background: #0F1923; padding: 60px 48px 32px; }
   </div>
 </section>
 
+<!-- ORDER PICKER (shared control for every section below) -->
+<div class="picker-wrap">
+  <div class="picker-sentinel" id="picker-sentinel"></div>
+  <div class="order-picker" id="order-picker">
+    <div class="picker-top">
+      <span class="picker-label">Your order</span>
+    </div>
+    <div class="picker-top" style="margin-top:-14px;">
+      <span class="picker-amount" id="picker-amount" aria-hidden="true">$30</span>
+    </div>
+    <div class="picker-slider-row">
+      <input type="range" class="picker-slider" id="picker-slider" min="10" max="100" step="1" value="30"
+             aria-label="Order amount in dollars" aria-valuetext="$30 order">
+      <div class="picker-exact">
+        <span>$</span>
+        <input type="number" id="picker-exact-input" min="10" max="100" step="1" value="30" inputmode="decimal" aria-label="Enter an exact order amount">
+      </div>
+    </div>
+    <div class="picker-chips">
+      <button type="button" class="chip" data-amt="15">$15</button>
+      <button type="button" class="chip" data-amt="30">$30</button>
+      <button type="button" class="chip" data-amt="60">$60</button>
+    </div>
+  </div>
+</div>
+
 <!-- THE LINE ITEM -->
 <section class="section">
   <div class="eyebrow">What you pay</div>
@@ -242,11 +351,17 @@ footer { background: #0F1923; padding: 60px 48px 32px; }
   </div>
   <p class="cmp-note">Our fee is flat. Theirs grows with your order.</p>
 
-  <div class="calc-box" id="calc-b">
-    <label for="calc-input">Your order: $</label>
-    <input type="number" id="calc-input" min="1" step="1" value="30" inputmode="decimal">
-    <span class="calc-hint" id="calc-b-out"></span>
+  <div class="fee-bars">
+    <div class="fee-bar-row">
+      <div class="fee-bar-label"><span>Apps service fee</span><span class="num" id="bar-apps-num">$1.50-2.25</span></div>
+      <div class="fee-bar-track"><div class="fee-bar-fill apps" id="bar-apps-fill"></div></div>
+    </div>
+    <div class="fee-bar-row">
+      <div class="fee-bar-label"><span>OrderFare</span><span class="num">$1.49</span></div>
+      <div class="fee-bar-track"><div class="fee-bar-fill ours" id="bar-ours-fill"></div></div>
+    </div>
   </div>
+  <div class="fee-bars-caption">$1.49 no matter the order.</div>
 </section>
 
 <hr class="warm">
@@ -277,11 +392,22 @@ footer { background: #0F1923; padding: 60px 48px 32px; }
       </tbody>
     </table>
   </div>
-  <div class="calc-box" id="calc-c">
-    <label for="calc-input-c">Your order: $</label>
-    <input type="number" id="calc-input-c" min="1" step="1" value="30" inputmode="decimal">
-    <span class="calc-hint" id="calc-c-out"></span>
+  <div class="receipts">
+    <div class="receipt">
+      <div class="receipt-title">Delivery app</div>
+      <div class="receipt-row"><span>Menu</span><span class="val" id="r-menu">$30.00</span></div>
+      <div class="receipt-row hl"><span>Hidden uplift</span><span class="val" id="r-uplift">+$4.50-7.50</span></div>
+      <div class="receipt-row"><span>Service fee</span><span class="val" id="r-fee">+$3.00-4.50</span></div>
+      <div class="receipt-row total"><span>You pay</span><span class="val" id="r-total">$37.50-42.00</span></div>
+    </div>
+    <div class="receipt ours">
+      <div class="receipt-title">OrderFare</div>
+      <div class="receipt-row"><span>Menu</span><span class="val" id="r-menu-ours">$30.00</span></div>
+      <div class="receipt-row"><span>Fee</span><span class="val">$1.49</span></div>
+      <div class="receipt-row total"><span>You pay</span><span class="val" id="r-total-ours">$31.49</span></div>
+    </div>
   </div>
+  <div class="diff-badge">You pay <span id="extra-badge-num">$6.01-10.51</span> more on the apps</div>
 </section>
 
 <hr class="warm">
@@ -289,10 +415,10 @@ footer { background: #0F1923; padding: 60px 48px 32px; }
 <!-- PUT TOGETHER -->
 <section class="section">
   <div class="eyebrow">Put together</div>
-  <h2 class="section-title">On a $30 order.</h2>
+  <h2 class="section-title">On a <span id="put-together-amt">$30</span> order.</h2>
   <div class="big-compare">
     <div class="big-card">
-      <div class="big-num">$7.50-12.00</div>
+      <div class="big-num" id="big-apps-num">$7.50-12.00</div>
       <div class="big-lbl">In fees and uplift, before tip</div>
       <div class="big-sub">DoorDash-style service fee plus hidden menu uplift, combined</div>
     </div>
@@ -302,12 +428,11 @@ footer { background: #0F1923; padding: 60px 48px 32px; }
       <div class="big-sub">One flat fee. Counter menu prices. Nothing else added.</div>
     </div>
   </div>
-  <p class="fine-note">Delivery fees are the restaurant's own and are not included on either side. Tips go 100% to the restaurant or driver.</p>
-  <div class="calc-box" id="calc-d">
-    <label for="calc-input-d">Your order: $</label>
-    <input type="number" id="calc-input-d" min="1" step="1" value="30" inputmode="decimal">
-    <span class="calc-hint" id="calc-d-out"></span>
+  <div class="gap-bar-wrap">
+    <div class="gap-bar-track"><div class="gap-bar-fill" id="gap-bar-fill"></div></div>
+    <div class="gap-bar-lbl" id="gap-lbl">Gap: $6.01-10.51</div>
   </div>
+  <p class="fine-note">Delivery fees are the restaurant's own and are not included on either side. Tips go 100% to the restaurant or driver.</p>
 </section>
 
 <hr class="warm">
@@ -317,7 +442,23 @@ footer { background: #0F1923; padding: 60px 48px 32px; }
   <div class="eyebrow">What the restaurant keeps</div>
   <h2 class="section-title">The other side of the same order.</h2>
   <div class="keeps-box">
-    <p>On that same $30 order, the restaurant keeps the $4.50-9.00 it would have otherwise paid in commission to a delivery app. OrderFare charges the restaurant a flat $99/month plan instead - see the <a href="/how-it-works.html">pricing details on how it works</a>.</p>
+    <p>On that same order, the restaurant keeps the commission it would have otherwise paid to a delivery app. OrderFare charges the restaurant a flat $99/month plan instead - see the <a href="/how-it-works.html">pricing details on how it works</a>.</p>
+    <div class="keeps-bars">
+      <div>
+        <div class="keeps-bar-label">On the apps</div>
+        <div class="keeps-bar-track">
+          <div class="keeps-bar-seg keep" id="keeps-apps-keep" style="width:77.5%"></div>
+          <div class="keeps-bar-seg commission" id="keeps-apps-commission" style="width:22.5%"></div>
+        </div>
+      </div>
+      <div>
+        <div class="keeps-bar-label">On OrderFare</div>
+        <div class="keeps-bar-track">
+          <div class="keeps-bar-seg keep" style="width:100%"></div>
+        </div>
+      </div>
+    </div>
+    <div class="keeps-summary">The shop keeps <b id="keeps-summary-num">$30.00</b> on OrderFare, <b id="keeps-summary-range">$21.00-25.50</b> on the apps.</div>
   </div>
 </section>
 
@@ -388,45 +529,128 @@ footer { background: #0F1923; padding: 60px 48px 32px; }
 </footer>
 
 <script>
-// ── LIVE CALCULATOR (pure client-side, no tracking) ──
+// ── LIVE COST-COMPARISON GRAPHICS (pure client-side, no tracking, no libraries) ──
 (function () {
-  var fmt = function (n) {
-    return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  };
-  var range = function (lowPct, highPct, subtotal) {
-    var lo = subtotal * lowPct;
-    var hi = subtotal * highPct;
-    if (lowPct === highPct) return fmt(lo);
-    return fmt(lo) + '-' + fmt(hi);
-  };
-  var inputs = [
-    document.getElementById('calc-input'),
-    document.getElementById('calc-input-c'),
-    document.getElementById('calc-input-d')
-  ];
-  var outs = {
-    b: document.getElementById('calc-b-out'),
-    c: document.getElementById('calc-c-out'),
-    d: document.getElementById('calc-d-out')
-  };
+  var MIN = 10, MAX = 100;
+  var FEE_BAR_SCALE = 15;   // headroom above 12.5% * MAX (=12.5) so the apps bar never fills 100%
+  var GAP_SCALE = 32;       // headroom above (32.5% * MAX) - 1.49 (=31.01)
 
-  function recompute(subtotal) {
-    if (!subtotal || subtotal <= 0) return;
-    outs.b.textContent = 'DoorDash: ' + range(0.10, 0.15, subtotal) + ' · Uber Eats: ' + range(0.15, 0.15, subtotal) + ' · OrderFare: $1.49';
-    outs.c.textContent = 'Hidden menu uplift: ' + range(0.15, 0.25, subtotal) + ' · OrderFare: $0';
-    var ddLow = subtotal * 0.10, ddHigh = subtotal * 0.15;
-    var upLow = subtotal * 0.15, upHigh = subtotal * 0.25;
-    outs.d.textContent = 'Apps combined: ' + fmt(ddLow + upLow) + '-' + fmt(ddHigh + upHigh) + ' · OrderFare: $1.49';
+  var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  var picker = document.getElementById('order-picker');
+  var slider = document.getElementById('picker-slider');
+  var exactInput = document.getElementById('picker-exact-input');
+  var amountEl = document.getElementById('picker-amount');
+  var chips = Array.prototype.slice.call(document.querySelectorAll('.chip'));
+  var sentinel = document.getElementById('picker-sentinel');
+
+  function round2(n) { return Math.round(n * 100) / 100; }
+  function fmt(n) {
+    return '$' + round2(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function fmtRange(lo, hi) {
+    lo = round2(lo); hi = round2(hi);
+    if (Math.abs(lo - hi) < 0.005) return fmt(lo);
+    return fmt(lo) + '-' + fmt(hi);
   }
 
-  inputs.forEach(function (el) {
+  // Generic tween: animates a single number or a [lo, hi] pair via requestAnimationFrame.
+  function tween(el, to, formatter, duration) {
     if (!el) return;
-    el.addEventListener('input', function () {
-      var v = parseFloat(el.value);
-      inputs.forEach(function (other) { if (other && other !== el) other.value = el.value; });
-      recompute(v);
-    });
+    if (reduceMotion) {
+      el.textContent = formatter(to);
+      el._val = to;
+      return;
+    }
+    var isPair = Array.isArray(to);
+    var from = el._val != null ? el._val : (isPair ? [to[0], to[1]] : to);
+    var start = null;
+    if (el._raf) cancelAnimationFrame(el._raf);
+    function step(ts) {
+      if (!start) start = ts;
+      var p = Math.min(1, (ts - start) / duration);
+      var eased = 1 - Math.pow(1 - p, 3);
+      var cur = isPair
+        ? [from[0] + (to[0] - from[0]) * eased, from[1] + (to[1] - from[1]) * eased]
+        : from + (to - from) * eased;
+      el.textContent = formatter(cur);
+      if (p < 1) { el._raf = requestAnimationFrame(step); } else { el._val = to; el._raf = null; }
+    }
+    el._raf = requestAnimationFrame(step);
+  }
+
+  function setWidth(el, pct) {
+    if (!el) return;
+    el.style.width = Math.max(0, Math.min(100, pct)) + '%';
+  }
+
+  function recompute(S) {
+    S = Math.max(MIN, Math.min(MAX, S));
+
+    // ── shared picker ──
+    tween(amountEl, S, function (v) { return '$' + Math.round(v); }, 350);
+    slider.value = S;
+    slider.setAttribute('aria-valuetext', '$' + S + ' order');
+    if (document.activeElement !== exactInput) exactInput.value = S;
+    chips.forEach(function (c) { c.classList.toggle('active', Number(c.dataset.amt) === S); });
+
+    // ── section a: fee bars ──
+    var appsFeeLo = 0.10 * S, appsFeeHi = 0.15 * S, appsFeeBar = 0.125 * S;
+    tween(document.getElementById('bar-apps-num'), [appsFeeLo, appsFeeHi], function (v) { return fmtRange(v[0], v[1]); }, 400);
+    setWidth(document.getElementById('bar-apps-fill'), appsFeeBar / FEE_BAR_SCALE * 100);
+    setWidth(document.getElementById('bar-ours-fill'), 1.49 / FEE_BAR_SCALE * 100);
+
+    // ── section b: receipts ──
+    var upliftLo = 0.15 * S, upliftHi = 0.25 * S;
+    var totalLo = S + upliftLo + appsFeeLo, totalHi = S + upliftHi + appsFeeHi;
+    tween(document.getElementById('r-menu'), S, fmt, 400);
+    tween(document.getElementById('r-uplift'), [upliftLo, upliftHi], function (v) { return '+' + fmtRange(v[0], v[1]); }, 400);
+    tween(document.getElementById('r-fee'), [appsFeeLo, appsFeeHi], function (v) { return '+' + fmtRange(v[0], v[1]); }, 400);
+    tween(document.getElementById('r-total'), [totalLo, totalHi], function (v) { return fmtRange(v[0], v[1]); }, 400);
+    tween(document.getElementById('r-menu-ours'), S, fmt, 400);
+    tween(document.getElementById('r-total-ours'), S + 1.49, fmt, 400);
+
+    var combLo = 0.25 * S, combHi = 0.40 * S;
+    var extraLo = combLo - 1.49, extraHi = combHi - 1.49;
+    tween(document.getElementById('extra-badge-num'), [extraLo, extraHi], function (v) { return fmtRange(v[0], v[1]); }, 400);
+
+    // ── section c: put together ──
+    document.getElementById('put-together-amt').textContent = '$' + S;
+    tween(document.getElementById('big-apps-num'), [combLo, combHi], function (v) { return fmtRange(v[0], v[1]); }, 400);
+    var gapMid = (combLo + combHi) / 2 - 1.49;
+    setWidth(document.getElementById('gap-bar-fill'), gapMid / GAP_SCALE * 100);
+    document.getElementById('gap-lbl').textContent = 'Gap: ' + fmtRange(extraLo, extraHi);
+
+    // ── section d: what the restaurant keeps ──
+    var commLo = 0.15 * S, commHi = 0.30 * S, commBar = 0.225 * S;
+    var commBarPct = commBar / S * 100;
+    setWidth(document.getElementById('keeps-apps-commission'), commBarPct);
+    setWidth(document.getElementById('keeps-apps-keep'), 100 - commBarPct);
+    tween(document.getElementById('keeps-summary-num'), S, fmt, 400);
+    tween(document.getElementById('keeps-summary-range'), [S - commHi, S - commLo], function (v) { return fmtRange(v[0], v[1]); }, 400);
+  }
+
+  function onAmount(raw) {
+    var n = parseFloat(raw);
+    if (isNaN(n)) return;
+    n = Math.max(MIN, Math.min(MAX, Math.round(n)));
+    recompute(n);
+  }
+
+  slider.addEventListener('input', function () { onAmount(this.value); });
+  exactInput.addEventListener('input', function () { onAmount(this.value); });
+  exactInput.addEventListener('blur', function () { exactInput.value = slider.value; });
+  chips.forEach(function (c) {
+    c.addEventListener('click', function () { onAmount(c.dataset.amt); });
   });
+
+  // Sticky-compact: shrink the picker once its sentinel scrolls out from under the nav.
+  if (sentinel && 'IntersectionObserver' in window) {
+    var obs = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) { picker.classList.toggle('is-compact', !e.isIntersecting); });
+    }, { threshold: 0, rootMargin: '-66px 0px 0px 0px' });
+    obs.observe(sentinel);
+  }
 
   recompute(30);
 })();
