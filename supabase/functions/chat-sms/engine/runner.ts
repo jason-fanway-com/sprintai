@@ -217,7 +217,7 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
 
   // 4. checkout: expire a stale session on reopen; create one on handoff
   const priorSession = input.cart.stripe_checkout_session_id ?? form0.checkout_session_id;
-  if (priorSession && !form.confirmed) {
+  if (priorSession && (!form.confirmed || form.checkout_session_id !== priorSession)) { // reopened, or relinked after a change: the old session must die before a new one exists
     try { await deps.expireCheckout(priorSession); } catch (e) { console.error("[engine] expire failed", e); }
     await deps.supabase.from("order_carts").update({ stripe_checkout_session_id: null, phase: "building" }).eq("id", input.cart.id);
   }
@@ -229,7 +229,7 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
     });
     if (res.ok) {
       form.checkout_session_id = res.sessionId; form.checkout_url = res.url;
-      out.plan.question = { kind: "handoff", totals: t, url: res.url };
+      out.plan.question = { kind: "handoff", totals: t, url: res.url, relink: out.plan.question?.kind === "handoff" && out.plan.question.relink };
       reply = render(out.plan, form, menu, { shop_name: menu.shop.name, phone_display: menu.shop.phone_display });
     } else {
       await logError(deps.supabase, { conversationId: input.conversationId, shopId: input.shop.id, tenantId: input.shop.tenant_id, phase: "chat-sms", stage: "render", customerMessage: input.message, error: new Error(`checkout failed: ${res.error}`) });

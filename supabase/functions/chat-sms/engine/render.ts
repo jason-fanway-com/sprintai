@@ -21,7 +21,7 @@ export type Info =
 export type Question =
   | { kind: "open"; open: OpenQuestion; count: number; heard?: string }
   | { kind: "readback"; totals: Totals; count: number }
-  | { kind: "handoff"; totals: Totals; url: string | null };
+  | { kind: "handoff"; totals: Totals; url: string | null; relink?: boolean };
 
 export interface ReplyPlan {
   greeting: boolean;
@@ -181,7 +181,8 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
         T.confirmAsk(q.count),
       ].join("\n"));
     } else if (q.kind === "handoff") {
-      parts.push(`${T.handoff(q.url)} ${T.afterPay(form.fulfillment === "delivery")}`.trim());
+      const pay = `${q.relink ? T.relink() + " " : ""}${T.handoff(q.url)} ${T.afterPay(form.fulfillment === "delivery")}`.trim();
+      parts.push(q.relink ? [T.readbackHeader(form.fulfillment, withoutCountry(form.address?.formatted ?? form.address?.text ?? "") || null, false), ...receiptRows(q.totals).map((r, k) => `${k + 1}) ${r}`), moneyLine(q.totals), pay].join("\n") : pay);
     }
   }
   // short one-line parts read as one message ("Added 1 × Garlic Knots. Anything else?"); anything with a list keeps its own block

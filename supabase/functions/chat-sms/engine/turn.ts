@@ -286,6 +286,7 @@ export function turn(input: TurnInput): TurnOutput {
   // a remark, a menu question or a cart read-back is a conversation, not a customer who is stuck
   const conversational = res.talk !== null || res.askMenu !== undefined || res.showCart;
   let q: OpenQuestion | null = next(form, menu, res.refAsk);
+  if (form.relink && q?.kind === "confirm") { form.confirmed = true; form.status = "awaiting_payment"; ledger.push({ turn: t, event: "relink_after_change" }); q = next(form, menu, res.refAsk); } // the customer already confirmed once; the change was theirs, so the updated order and the new link go out together
   let key = questionKey(q);
   let count = key !== null && key === form.asked.key && !progress ? (conversational ? form.asked.count : form.asked.count + 1) : 0;
   form.open = q; form.asked = { key, count };
@@ -363,7 +364,7 @@ export function turn(input: TurnInput): TurnOutput {
 
   let question: Question | null = null;
   if (form.status === "abandoned") question = null;
-  else if (handoff) question = { kind: "handoff", totals: totals(form, menu), url: input.checkoutUrl ?? null };
+  else if (handoff) { question = { kind: "handoff", totals: totals(form, menu), url: input.checkoutUrl ?? null, relink: !!form.relink }; form.relink = false; }
   else if (q?.kind === "confirm") question = { kind: "readback", totals: totals(form, menu), count };
   else if (q) question = { kind: "open", open: q, count, heard: count > 0 && !conversational && !input.closed ? words(input.message).join(" ") : undefined };
 

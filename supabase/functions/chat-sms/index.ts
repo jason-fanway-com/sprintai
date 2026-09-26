@@ -82,7 +82,7 @@ export function appendComplianceDisclosureIfFirstContact(reply: string, isLifeti
 // the exact three-line test/live hard-gate the legacy submit_order case has
 // always had (search "HARD-GATE: test mode MUST use test Stripe" in
 // executeTool) rather than duplicating that gate's logic a second time.
-const COMPLIANCE_HELP = "SprintAI text ordering. Text your order to this number to order from this restaurant. Message frequency varies by order, typically 3-8 messages per order. Support: support@getsprintai.com. Msg & data rates may apply. Reply STOP to opt out.";
+const COMPLIANCE_HELP = "OrderFare text ordering. Text your order to this number to order from this restaurant. Message frequency varies by order, typically 3-8 messages per order. Support: support@getsprintai.com. Msg & data rates may apply. Reply STOP to opt out.";
 const COMPLIANCE_START = "Thanks for texting! You'll receive order-related messages from this restaurant. Message frequency may vary. Msg&data rates may apply. Reply HELP for help, STOP to opt out.";
 
 // ─── Customer-facing name ask (ONE wording, both order types) ───────────────
@@ -1399,7 +1399,7 @@ export async function handleSystemEvent(
       </div>
     </div>
     <div style="padding:16px 32px;background:#f4f4f4;text-align:center;">
-      <p style="margin:0;font-size:12px;color:#999;">Powered by SprintAI</p>
+      <p style="margin:0;font-size:12px;color:#999;">Powered by OrderFare</p>
     </div>
   </div>
 </body>
@@ -1422,7 +1422,7 @@ export async function handleSystemEvent(
                 method: "POST",
                 headers: { "Authorization": `Bearer ${resendApiKey}`, "Content-Type": "application/json" },
                 body: JSON.stringify({
-                  from: "SprintAI Orders <orders@getsprintai.com>",
+                  from: "OrderFare Orders <orders@getsprintai.com>",
                   to: [shop.email_ticket_recipient],
                   subject: emailSubject,
                   html: emailHtml,

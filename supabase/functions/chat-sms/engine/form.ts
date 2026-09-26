@@ -81,6 +81,7 @@ export interface OrderForm {
   asked: { key: string | null; count: number };
   omissions: Array<{ span: string; qty: number; declined: boolean; offer?: boolean }>; // offer: we answered "do you have X?" and asked "want one?"
   said_robot?: boolean; // the "I'm a robot" line is said once per conversation
+  relink?: boolean; // a pay link existed and the order changed: send the updated order and a fresh link together, no second YES
   turn_no: number;
   /** set by the runner when a checkout session exists for the confirmed form */
   checkout_session_id: string | null;
@@ -168,6 +169,7 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: LineMatc
 
   const reopenIfConfirmed = () => {
     if (form.status === "confirming" || form.status === "awaiting_payment") {
+      if (form.status === "awaiting_payment") form.relink = true;
       form.status = "open";
       form.confirmed = false;
       form.checkout_session_id = null;

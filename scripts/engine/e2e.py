@@ -51,8 +51,9 @@ def canary(addr):
         ("thats it", lambda c, r: expect("Reply YES" in r, f"expected readback, got: {r!r}") + expect(c["subtotal_cents"] == 849, f"subtotal {c['subtotal_cents']}")),
         ("yes", lambda c, r: expect(bool(c["stripe_checkout_session_id"]), "no checkout session") + expect(c["total_cents"] == 849 + 99 + c["tax_cents"], f"total {c['total_cents']} vs 948+tax {c['tax_cents']}") + expect(len(lines(c)) == 1, f"extra lines {names(c)}")),
         # an edit after the link: old session expired, form reopened, new readback
-        ("actually add garlic knots too", lambda c, r: expect(len(lines(c)) == 2, f"lines {names(c)}") + expect(c["stripe_checkout_session_id"] in (None, ""), f"stale session kept: {c['stripe_checkout_session_id']}") + expect("Reply YES" in r, f"expected readback: {r!r}")),
-        ("yes", lambda c, r: expect(bool(c["stripe_checkout_session_id"]), "no new checkout session") + expect(c["subtotal_cents"] == 849 + 599, f"subtotal {c['subtotal_cents']}")),
+        # an edit after the link: old session expired, a fresh one created, the updated order and new link in one message (2026-09-26)
+        ("actually add garlic knots too", lambda c, r: expect(len(lines(c)) == 2, f"lines {names(c)}") + expect(bool(c["stripe_checkout_session_id"]), "no new checkout session") + expect("earlier link won't work" in r and "Pay here" in r, f"expected updated order + new link: {r!r}") + expect(c["subtotal_cents"] == 849 + 599, f"subtotal {c['subtotal_cents']}")),
+        ("thanks", lambda c, r: expect("Pay here" in r, f"expected the link re-sent: {r!r}")),
     ]
 
 def delivery3(addr):

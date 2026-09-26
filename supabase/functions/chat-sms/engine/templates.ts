@@ -83,6 +83,7 @@ export const T = {
   cartLacks: (name: string) => `No ${name} on your order yet.`,
   missed: (heard: string, what: string) => `Sorry, I didn't catch "${heard}" as ${what}.`,
   moneyLine: (parts: string[]) => parts.join(" · "),
+  relink: () => `Your total changed, so the earlier link won't work anymore.`,
   handoff: (url: string | null) => (url ? `Pay here: ${url}` : `I couldn't create your payment link just now.`),
   checkoutFailed: () => `I couldn't create your payment link just now. Reply YES to try again.`,
   // the same wait the paid receipt promises (index.ts): pickup 10-15 min, delivery 30-45 min

@@ -117,9 +117,9 @@ Deno.test("runner: canary through the shell, tax and fee in the checkout request
 
   out = await runEngineTurn({ ...base, cart, message: "add a cheesesteak", isFirstContact: false }, d);
   assertEquals(d.expired, ["cs_test_1"]);
-  assertEquals(out.form.checkout_session_id, null);
+  assertEquals(out.form.checkout_session_id, "cs_test_1"); // a change after the link: the old session expired and a fresh one created in the same turn (2026-09-26)
   assertStringIncludes(out.reply, "Cheesesteak");
-  assertStringIncludes(out.reply, "Reply YES");
+  assertStringIncludes(out.reply, "earlier link won't work anymore. Pay here: https://pay.example/o/abc");
 });
 
 Deno.test("runner: a failed model call becomes an honest re-ask, never a crash", async () => {
@@ -235,5 +235,19 @@ Deno.test("runner: the voice rewrites a short reply when it keeps every fact, an
   assertEquals(await say((d) => d.replace("Anything else?", "Anything else? Your total is $6.34.")), draft); // an invented number: the draft
   assertEquals(await say((d) => "Sure thing! Anything else?"), draft); // the item name dropped: the draft
   assertEquals(await say((d) => d.replace("Anything else?", "Want fries with that?")), draft); // a menu item the draft never named, lowercase: the draft
+});
+
+Deno.test("runner: a change after the pay link expires the old session, creates a new one, and the reply carries the new link with the updated order", async () => {
+  const db = new FakeDb(); const d = deps(db, (m) => m === "garlic knots" ? [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }] : m.includes("cheesesteak") ? [{ kind: "add_line", item_span: "cheesesteak", qty: 1, option_spans: [] }] : []);
+  const base = { shop, conversationId: "c1", lastBotMessage: null, cart: { id: "cart1", engine_form: null, stripe_checkout_session_id: null, test_mode: true, notes: null } } as Parameters<typeof runEngineTurn>[0];
+  let out = await runEngineTurn({ ...base, message: "pickup" }, d);
+  for (const m of ["garlic knots", "thats it", "yes"]) out = await runEngineTurn({ ...base, message: m, cart: { ...base.cart, engine_form: out.form, stripe_checkout_session_id: out.form.checkout_session_id } }, d);
+  assertStringIncludes(out.reply, "https://pay.example/o/abc");
+  out = await runEngineTurn({ ...base, message: "wait add a cheesesteak too", cart: { ...base.cart, engine_form: out.form, stripe_checkout_session_id: out.form.checkout_session_id } }, d);
+  assertEquals(d.expired, ["cs_test_1"]);
+  assertEquals(d.created.length, 2);
+  assertStringIncludes(out.reply, "Here's the updated order for pickup:");
+  assertStringIncludes(out.reply, "earlier link won't work anymore. Pay here: https://pay.example/o/abc");
+  assertEquals(out.form.status, "awaiting_payment");
 });
 

@@ -412,9 +412,9 @@ async function sendWelcomeEmail(
         method: "POST",
         headers: { "Authorization": `Bearer ${resendKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-          from: "SprintAI <hello@getsprintai.com>",
+          from: "OrderFare <hello@getsprintai.com>",
           to: [email],
-          subject: `Welcome to the SprintAI family, ${ownerName} 🎉`,
+          subject: `Welcome to the OrderFare family, ${ownerName} 🎉`,
           html: welcomeEmailHtml(ownerName, setupUrl),
         }),
       });
@@ -503,7 +503,7 @@ function welcomeEmailHtml(ownerName: string, setupUrl: string): string {
   <!-- Header bar -->
   <tr><td style="background:#E8521A;padding:28px 32px;text-align:center;">
     <div style="font-size:32px;">🍕</div>
-    <div style="font-family:Georgia,serif;font-size:22px;font-weight:800;color:#fff;margin-top:6px;">SprintAI</div>
+    <div style="font-family:Georgia,serif;font-size:22px;font-weight:800;color:#fff;margin-top:6px;">OrderFare</div>
   </td></tr>
   <!-- Body -->
   <tr><td style="padding:32px;color:#2A3540;">

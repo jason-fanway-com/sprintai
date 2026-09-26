@@ -165,7 +165,7 @@ export async function createCheckoutSession(
     price_data: {
       currency:     "usd",
       unit_amount:  input.serviceFeeCents,
-      product_data: { name: "Service fee", description: "SprintAI platform service fee" },
+      product_data: { name: "Service fee", description: "OrderFare service fee" },
     },
     quantity: 1,
   });

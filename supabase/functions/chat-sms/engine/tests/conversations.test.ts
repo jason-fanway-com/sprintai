@@ -1436,3 +1436,29 @@ Deno.test("voice: a rewrite must keep every number and name, keep the question, 
   assertEquals(faithfulRewrite("Updated: 3 × Hot Dog. Anything else?", "Got it, so that's 3 Hot Dogs total now. Anything else?"), null); // a plural of a name is the name
 });
 
+Deno.test("phone test 09-26: a change after the pay link sends the updated order and a fresh link together; asking for the link at the read-back is a yes", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "a cheesesteak", [{ kind: "add_line", item_span: "cheesesteak", qty: 1, option_spans: [] }]);
+  o = say(o.form, "thats it");
+  o = say(o.form, "resend the payment link"); // closed: a yes at the read-back
+  assertEquals(o.form.confirmed, true, o.reply);
+  assertEquals(o.form.status, "awaiting_payment");
+  o = say(o.form, "wait i need 2 more cheesesteaks", [{ kind: "change_line", ref: { span: "cheesesteaks" }, qty: 3, add_option_spans: [], remove_option_spans: [] }]);
+  assertEquals(o.form.lines[0].qty, 3, o.reply);
+  assertEquals(o.form.confirmed, true, o.reply); // no second YES
+  assertEquals(o.form.status, "awaiting_payment");
+  assertStringIncludes(o.reply, "Here's the updated order for pickup:");
+  assertStringIncludes(o.reply, "3 × Cheesesteak");
+  assertStringIncludes(o.reply, "Your total changed, so the earlier link won't work anymore.");
+  assert(!o.reply.includes("Reply YES"), o.reply);
+  assert(o.ledger.some((e) => e.event === "relink_after_change"));
+  // a change that needs a question first still asks, then relinks once the order is whole again
+  let p = say(o.form, "and a house salad", [{ kind: "add_line", item_span: "house salad", qty: 1, option_spans: [] }]);
+  assertStringIncludes(p.reply, "dressing");
+  assertEquals(p.form.confirmed, false);
+  p = say(p.form, "ranch");
+  assertEquals(p.form.confirmed, true, p.reply);
+  assertStringIncludes(p.reply, "earlier link won't work");
+});
+

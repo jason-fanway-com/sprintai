@@ -378,7 +378,7 @@ async function notifyShopOfDispute(
       method: "POST",
       headers: { "Authorization": `Bearer ${resendApiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        from: "SprintAI <hello@getsprintai.com>",
+        from: "OrderFare <hello@getsprintai.com>",
         to: [recipient],
         subject: `Chargeback filed on an order — action may be required`,
         html: `<p>A diner disputed a recent order (cart ${cartId}) for <strong>$${amount}</strong> (reason: ${dispute.reason}).</p>
@@ -655,12 +655,12 @@ async function sendFoundingThankYouEmail(toEmail: string, ownerName: string): Pr
 <table width="520" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:16px;box-shadow:0 2px 16px rgba(0,0,0,0.06);overflow:hidden;">
   <tr><td style="background:#E8521A;padding:28px 32px;text-align:center;">
     <div style="font-size:32px;">🎉</div>
-    <div style="font-family:Georgia,serif;font-size:22px;font-weight:800;color:#fff;margin-top:6px;">You're a SprintAI Founding Shop</div>
+    <div style="font-family:Georgia,serif;font-size:22px;font-weight:800;color:#fff;margin-top:6px;">You're an OrderFare Founding Shop</div>
   </td></tr>
   <tr><td style="padding:32px;color:#2A3540;">
     <h1 style="font-family:Georgia,serif;font-size:20px;margin:0 0 12px;color:#17212E;">Thank you, ${name}.</h1>
     <p style="font-size:16px;line-height:1.6;margin:0 0 16px;color:#2A3540;">
-      You're one of the very first restaurants on SprintAI — and that means the world to us. You're helping shape what this platform becomes, and we don't take that lightly.
+      You're one of the very first restaurants on OrderFare — and that means the world to us. You're helping shape what this platform becomes, and we don't take that lightly.
     </p>
     <p style="font-size:16px;line-height:1.6;margin:0 0 16px;color:#2A3540;">
       As a founding shop, your $99/month subscription is <strong>waived for the next six months</strong>. You'll only pay the small $0.99 per-order service fee — the rest is our way of saying thank you for being early.
@@ -670,12 +670,12 @@ async function sendFoundingThankYouEmail(toEmail: string, ownerName: string): Pr
     </p>
     <p style="font-size:14px;color:#687585;margin:0;">
       With gratitude,<br/>
-      The SprintAI Team
+      The OrderFare Team
     </p>
   </td></tr>
   <tr><td style="background:#FEF3EE;padding:20px 32px;text-align:center;">
     <p style="font-size:12px;color:#96A5B4;margin:0;">
-      SprintAI · Allentown, PA · <a href="https://getsprintai.com/privacy.html" style="color:#96A5B4;">Privacy</a>
+      OrderFare · Allentown, PA · <a href="https://getsprintai.com/privacy.html" style="color:#96A5B4;">Privacy</a>
     </p>
   </td></tr>
 </table>
@@ -688,9 +688,9 @@ async function sendFoundingThankYouEmail(toEmail: string, ownerName: string): Pr
     method: "POST",
     headers: { "Authorization": `Bearer ${resendKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      from: "SprintAI <hello@getsprintai.com>",
+      from: "OrderFare <hello@getsprintai.com>",
       to: [toEmail],
-      subject: `You're a SprintAI Founding Shop, ${name} 🎉`,
+      subject: `You're an OrderFare Founding Shop, ${name} 🎉`,
       html,
     }),
   });
@@ -1147,7 +1147,7 @@ async function sendWelcomeSMS(
   const accountSid = Deno.env.get("TWILIO_ACCOUNT_SID") ?? "";
   const authToken = Deno.env.get("TWILIO_AUTH_TOKEN") ?? "";
 
-  const message = `Welcome to SprintAI! Your AI chat assistant for ${businessName} is now live. ` +
+  const message = `Welcome to OrderFare! Your AI chat assistant for ${businessName} is now live. ` +
     `Share this number with your customers: ${fromNumber}. Text START to test it yourself!`;
 
   const { sent } = await guardedSend(
@@ -1272,7 +1272,7 @@ async function sendWelcomeEmail({ toEmail, businessName, tenantId }: WelcomeEmai
           <!-- Header -->
           <tr>
             <td style="background:linear-gradient(135deg,#4f46e5,#6d28d9);padding:32px 40px;text-align:center;">
-              <p style="margin:0 0 8px;font-size:12px;font-weight:600;color:rgba(255,255,255,0.7);letter-spacing:0.08em;text-transform:uppercase;">SprintAI</p>
+              <p style="margin:0 0 8px;font-size:12px;font-weight:600;color:rgba(255,255,255,0.7);letter-spacing:0.08em;text-transform:uppercase;">OrderFare</p>
               <h1 style="margin:0;font-size:26px;font-weight:800;color:white;letter-spacing:-0.02em;">Your AI assistant is live!</h1>
             </td>
           </tr>
@@ -1357,7 +1357,7 @@ async function sendWelcomeEmail({ toEmail, businessName, tenantId }: WelcomeEmai
           <tr>
             <td style="padding:20px 40px 28px;text-align:center;border-top:1px solid #f1f5f9;">
               <p style="margin:0;font-size:12px;color:#94a3b8;">
-                SprintAI &nbsp;|&nbsp; AI Chat &amp; Text for local businesses<br/>
+                OrderFare &nbsp;|&nbsp; AI Chat &amp; Text for local businesses<br/>
                 <a href="https://getsprintai.com" style="color:#a5b4fc;text-decoration:none;">getsprintai.com</a>
               </p>
             </td>
@@ -1378,7 +1378,7 @@ async function sendWelcomeEmail({ toEmail, businessName, tenantId }: WelcomeEmai
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: "SprintAI <hello@getsprintai.com>",
+        from: "OrderFare <hello@getsprintai.com>",
         to: [toEmail],
         subject: "Your AI assistant is live! Here's your embed code",
         html: htmlBody,
