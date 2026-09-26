@@ -14,7 +14,7 @@
 import Stripe from "https://esm.sh/stripe@14.21.0?target=deno";
 
 /** Flat SprintAI platform service fee, in cents. Rides on top of food+tax. */
-export const SERVICE_FEE_CENTS = 99;
+export const SERVICE_FEE_CENTS = 149; // Jason, 2026-09-26: $1.49 flat per order (was 99¢); modeled against Telnyx actuals and the apps' service fees
 
 /** Restaurant MCC — "Eating Places". */
 export const RESTAURANT_MCC = "5812";
