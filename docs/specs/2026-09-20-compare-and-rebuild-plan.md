@@ -521,3 +521,17 @@ type them). Everything else in the pass read as a person would want it: swaps, l
 question mid-order. 136 tests; core under 2,000. Pass cost: $0.30. Ten passes since the tester was built, about $2.00 of model
 spend in all. Ready for Jason's phone.
 
+**2026-09-25/26, from robotic to human (v648–v659).** Jason's two directions after his phone tests: "ask, don't guess" (the
+floor: no confident misreads, re-asks that name what we heard, never the same question twice the same way, the honest
+read-back that takes corrections) and "it should feel damn near human" (the voice layer: the engine's draft said by a small
+model and checked word for word before it goes out; identical lines merge; the robot line once; questions get answers;
+"glizzies means hot dog" is learned into the shop's lexicon). His 09-26 test was "almost perfect"; the one break was
+mechanical: a change after the pay link killed the link and forced a second YES with no explanation, and "resend the payment
+link" was not understood. Now a change after the link expires the old session and sends the updated order and a fresh link in
+one message ("Your total changed, so the earlier link won't work anymore"), and asking for the link at the read-back is a yes.
+Same day: OrderFare replaces SprintAI in every customer- and shop-facing text (shop order email, SMS compliance line, Stripe
+service-fee line, onboarding and founding-shop emails; stripe-webhook v96, onboarding-save v86); card statements now read
+ORDERFARE + the shop. Found while checking: the Stripe account's own public name and statement descriptor are
+"hygienichappiness.com" (Jason's other business) — dashboard settings, his to change. 145 tests. Design notes:
+`2026-09-25-ask-dont-guess.md`.
+
