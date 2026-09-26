@@ -160,7 +160,9 @@ if ! deno check "$ENTRYPOINT"; then
 fi
 
 echo "== 2/6 deno test: ${FUNC_DIR}/ =="
-if ! deno test --allow-all "${FUNC_DIR}/"; then
+if ! ls "${FUNC_DIR}"/*.test.ts >/dev/null 2>&1 && ! ls "${FUNC_DIR}"/**/*.test.ts >/dev/null 2>&1; then
+  echo "(no unit tests in ${FUNC_DIR}; type check is the gate)"
+elif ! deno test --allow-all "${FUNC_DIR}/"; then
   echo "FAIL: unit tests failed for ${FUNCTION_NAME}. Deploy aborted." >&2
   exit 1
 fi

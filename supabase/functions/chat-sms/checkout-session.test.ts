@@ -132,6 +132,8 @@ Deno.test("createCheckoutSession: session total matches an independently-compute
   assertEquals(createCalls.length, 1);
   // deno-lint-ignore no-explicit-any
   const stripeLineItems = createCalls[0].line_items as any[];
+  assertEquals((createCalls[0].payment_intent_data as { statement_descriptor: string }).statement_descriptor.startsWith("ORDERFARE "), true); // the card statement says OrderFare + the shop
+  assert((createCalls[0].payment_intent_data as { statement_descriptor: string }).statement_descriptor.length <= 22);
   const stripeChargeTotalCents = stripeLineItems.reduce(
     (s, li) => s + (li.price_data.unit_amount as number) * (li.quantity as number),
     0,

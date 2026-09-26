@@ -178,6 +178,8 @@ export async function createCheckoutSession(
     line_items:           stripeLineItems,
     metadata:             { order_cart_id: input.cartId, notes: input.notes ?? "" },
     custom_text:          { submit: { message: `Your order from ${input.shopName}${input.notes ? ` -- ${input.notes}` : ""}` } },
+    // the card statement reads ORDERFARE + the shop, not the Stripe account's own descriptor (2026-09-26)
+    payment_intent_data:  { statement_descriptor: `ORDERFARE ${input.shopName}`.toUpperCase().replace(/[^A-Z0-9 ]/g, "").replace(/\s+/g, " ").trim().slice(0, 22).trim() },
     success_url:          input.testMode
       ? `https://getsprintai.com/order-success-test?cart=${input.cartId}`
       : `https://getsprintai.com/order-success?cart=${input.cartId}`,
