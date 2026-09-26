@@ -546,3 +546,18 @@ of the SMS bill; the levers are caching (−60% interpreter input), a cheaper in
 `tests/eval/run-eval.ts`; nano/flash-lite class is 10× cheaper than Haiku), voice on the cheapest model (the engine verifies
 it), and SMS segment trimming (3–5¢ per order). Awaiting Jason's go on the $1.60 bake-off.
 
+**2026-09-26, SMS cost (v663).** Corrections after Jason pushed on the numbers: Vito's texts through Telnyx, not Twilio;
+segments are measured from Telnyx's own records (his 14-turn order was 58 segments, 44 out / 14 in, $0.70; a 25-turn order
+89 segments, $1.06); inbound is billed too ($0.0065 + $0.0025 carrier vs $0.0085 + $0.0045 out). Half the outbound
+segments were an encoding penalty: "×", "·", "—" and the 🧪 in the test-mode notice put every read-back into 16-bit text
+(67 characters a segment instead of 153). Now every outbound text is transliterated to GSM-7 at the send boundary
+(`_shared/gsm7.ts`), templates use x and |, the read-back header, confirm ask and after-pay lines are shorter, adds of
+three or fewer items are one line, a change after the link answers with the change and the new total instead of the whole
+read-back, and a remark after the link gets the remark, not the pay sentence again. Measured on the same 20 scripted
+end-of-order conversations (5.7 turns each): outbound 14.8 → 7.8 segments, SMS $0.243 → $0.153 per order at Telnyx
+actuals; `scripts/engine/segments.py` is the meter. The floor is now the turn count: every round-trip is at least one
+segment each way (~2.2¢), so a 6-turn order is ~15¢ and a 14-turn order ~43¢. Jason's target: keep the 99¢ fee with margin
+above 80% (all-in cost under ~20¢). Next levers are the turn count (tip on the pay page, fewer separate prompts) and the
+Telnyx outbound rate itself ($0.0085 on this account vs Telnyx's published 10DLC rates). Stripe fees are the shop's once
+onboarded through Connect; test orders move no money.
+
