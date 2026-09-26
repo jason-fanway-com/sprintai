@@ -35,6 +35,7 @@ mkdir -p "$OUT"
 PUBLIC_FILES=(
   "index.html"          # real marketing homepage
   "how-it-works.html"   # sales explainer (linked from Erin demo kit + funnel)
+  "why-orderfare.html"  # cost-comparison page (OrderFare vs DoorDash/Uber Eats), linked from nav+footer
   "contact.html"        # contact form (action=/thanks)
   "privacy.html"        # legal
   "terms.html"          # legal

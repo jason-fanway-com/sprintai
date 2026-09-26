@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Why OrderFare: One flat $1.49. Real menu prices.</title>
+<meta name="description" content="No percentage service fee. No marked-up menu. See exactly what a DoorDash or Uber Eats order really costs versus OrderFare's flat $1.49.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,700;0,9..144,800;1,9..144,400;1,9..144,700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --brand: #E8521A;
+  --brand-hover: #C94412;
+  --brand-light: #FEF3EE;
+  --brand-mid: #FBDACC;
+  --cream: #FFFDF9;
+  --warm: #FFF8F3;
+  --navy: #17212E;
+  --ink: #2A3540;
+  --muted: #687585;
+  --light: #96A5B4;
+  --border: #E6ECF2;
+  --border-warm: #EDE3DA;
+  --green: #16A34A;
+  --green-light: #F0FDF4;
+  --green-border: #BBF7D0;
+  --font-d: 'Fraunces', Georgia, serif;
+  --font-b: 'DM Sans', system-ui, sans-serif;
+  --r: 14px;
+  --r-sm: 8px;
+  --r-lg: 20px;
+}
+html { scroll-behavior: smooth; }
+body { font-family: var(--font-b); background: var(--cream); color: var(--ink); line-height: 1.6; overflow-x: hidden; }
+
+/* ── NAV ── */
+nav {
+  position: sticky; top: 0; z-index: 200;
+  background: rgba(255,253,249,0.94);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--border-warm);
+  padding: 0 48px; height: 66px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.logo { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+.logo-mark {
+  width: 36px; height: 36px; background: var(--brand);
+  border-radius: 10px; display: flex; align-items: center; justify-content: center;
+}
+.logo-mark-inner { font-size: 20px; }
+.logo-text { font-family: var(--font-d); font-weight: 700; font-size: 20px; color: var(--navy); letter-spacing: -0.3px; }
+.nav-links { display: flex; gap: 32px; list-style: none; }
+.nav-links a { font-size: 14px; font-weight: 500; color: var(--muted); text-decoration: none; transition: color .2s; }
+.nav-links a:hover { color: var(--navy); }
+.nav-right { display: flex; align-items: center; gap: 12px; }
+.btn-nav {
+  background: var(--brand); color: #fff; border: none;
+  padding: 10px 22px; border-radius: 10px; font-size: 14px; font-weight: 600;
+  cursor: pointer; font-family: var(--font-b); transition: background .2s;
+}
+.btn-nav:hover { background: var(--brand-hover); }
+
+/* ── SECTIONS ── */
+.section { padding: 88px 48px; max-width: 1140px; margin: 0 auto; }
+.eyebrow { font-size: 13px; font-weight: 700; color: var(--brand); text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 14px; }
+.section-title { font-family: var(--font-d); font-size: 40px; font-weight: 800; color: var(--navy); line-height: 1.12; letter-spacing: -0.8px; margin-bottom: 16px; }
+.section-sub { font-size: 18px; color: var(--muted); line-height: 1.7; max-width: 680px; }
+
+/* ── HERO ── */
+.wf-hero { max-width: 800px; margin: 0 auto; padding: 90px 48px 56px; text-align: center; }
+.wf-hero h1 {
+  font-family: var(--font-d); font-size: 52px; font-weight: 800;
+  line-height: 1.08; color: var(--navy); margin-bottom: 22px; letter-spacing: -1.2px;
+}
+.wf-hero-sub { font-size: 18px; color: var(--muted); line-height: 1.72; max-width: 620px; margin: 0 auto; }
+
+/* ── COMPARISON TABLE ── */
+.cmp-table-wrap { margin-top: 40px; overflow-x: auto; }
+.cmp-table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; }
+.cmp-table th, .cmp-table td { padding: 16px 20px; text-align: left; border-bottom: 1px solid var(--border); font-size: 15px; }
+.cmp-table th { background: var(--warm); font-size: 12px; font-weight: 700; color: var(--navy); text-transform: uppercase; letter-spacing: .6px; }
+.cmp-table td:not(:first-child), .cmp-table th:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
+.cmp-table tr:last-child td { border-bottom: none; }
+.cmp-table tr.good td { color: #15803D; font-weight: 700; background: var(--green-light); }
+.cmp-table td:first-child { color: var(--ink); font-weight: 600; }
+.cmp-note { margin-top: 20px; font-size: 15px; color: var(--muted); }
+
+@media (max-width: 480px) {
+  .cmp-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .cmp-table, .cmp-table tbody, .cmp-table tr, .cmp-table td { display: block; width: 100%; }
+  .cmp-table tr { border-bottom: 1px solid var(--border); padding: 14px 20px; }
+  .cmp-table tr:last-child { border-bottom: none; }
+  .cmp-table td { border: none; padding: 4px 0; display: flex; justify-content: space-between; text-align: right; }
+  .cmp-table td:first-child { font-weight: 700; color: var(--navy); display: block; text-align: left; padding-bottom: 8px; }
+  .cmp-table td:not(:first-child)::before { content: attr(data-label); font-weight: 500; color: var(--muted); text-align: left; }
+}
+
+/* ── BIG NUMBER ── */
+.big-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 48px; }
+.big-num { font-family: var(--font-d); font-size: 56px; font-weight: 800; color: var(--brand); line-height: 1; }
+.big-num.good { color: var(--green); }
+.big-lbl { font-size: 16px; font-weight: 600; color: var(--navy); margin-top: 10px; }
+.big-sub { font-size: 14px; color: var(--muted); margin-top: 4px; line-height: 1.55; }
+.big-card { background: var(--warm); border: 1px solid var(--border-warm); border-radius: var(--r-lg); padding: 32px; text-align: center; }
+.big-card.featured { background: var(--green-light); border-color: var(--green-border); }
+.fine-note { margin-top: 24px; font-size: 13px; color: var(--light); line-height: 1.6; max-width: 640px; }
+
+@media (max-width: 480px) {
+  .big-compare { grid-template-columns: 1fr; }
+}
+
+/* ── KEEPS BOX ── */
+.keeps-box { background: #fff; border: 1px solid var(--border); border-radius: var(--r-lg); padding: 32px; margin-top: 40px; }
+.keeps-box p { font-size: 16px; color: var(--ink); line-height: 1.75; }
+.keeps-box a { color: var(--brand); font-weight: 600; text-decoration: none; }
+.keeps-box a:hover { text-decoration: underline; }
+
+/* ── CALCULATOR ── */
+.calc-box { background: var(--warm); border: 1px solid var(--border-warm); border-radius: var(--r-lg); padding: 24px 28px; margin-top: 32px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.calc-box label { font-size: 14px; font-weight: 600; color: var(--navy); }
+.calc-box input {
+  width: 120px; padding: 10px 14px; border-radius: 10px; border: 1.5px solid var(--border);
+  font-size: 15px; font-family: var(--font-b); color: var(--ink);
+}
+.calc-box input:focus { outline: none; border-color: var(--brand); }
+.calc-hint { font-size: 13px; color: var(--muted); }
+
+/* ── SOURCES ── */
+.sources { padding: 56px 48px 88px; max-width: 1140px; margin: 0 auto; border-top: 1px solid var(--border-warm); }
+.sources h2 { font-family: var(--font-d); font-size: 22px; font-weight: 700; color: var(--navy); margin-bottom: 20px; }
+.sources ol { padding-left: 20px; color: var(--muted); font-size: 13px; line-height: 2; }
+.sources a { color: var(--muted); text-decoration: underline; }
+.sources a:hover { color: var(--brand); }
+
+/* ── CTA ── */
+.wf-cta { background: var(--navy); padding: 80px 48px; text-align: center; }
+.wf-cta h2 { font-family: var(--font-d); font-size: 34px; font-weight: 800; color: #fff; margin-bottom: 16px; letter-spacing: -0.6px; }
+.wf-cta p { font-size: 16px; color: rgba(255,255,255,.6); margin-bottom: 32px; }
+.btn-cta {
+  background: var(--brand); color: #fff; border: none;
+  padding: 15px 28px; border-radius: 12px; font-size: 16px; font-weight: 600;
+  cursor: pointer; font-family: var(--font-b); transition: background .2s, transform .1s;
+  text-decoration: none; display: inline-block;
+}
+.btn-cta:hover { background: var(--brand-hover); }
+.wf-cta-secondary { display: block; margin-top: 18px; font-size: 14px; color: rgba(255,255,255,.5); text-decoration: underline; }
+.wf-cta-secondary:hover { color: #fff; }
+
+/* ── DIVIDER ── */
+hr.warm { border: none; border-top: 1px solid var(--border-warm); }
+
+/* ── FOOTER ── */
+footer { background: #0F1923; padding: 60px 48px 32px; }
+.footer-top { display: flex; gap: 60px; flex-wrap: wrap; padding-bottom: 48px; border-bottom: 1px solid rgba(255,255,255,.07); margin-bottom: 32px; }
+.footer-brand-col { flex: 0 0 240px; }
+.footer-logo { font-family: var(--font-d); font-size: 20px; font-weight: 700; color: #fff; margin-bottom: 10px; }
+.footer-tagline { font-size: 13px; color: rgba(255,255,255,.4); line-height: 1.6; }
+.footer-legal { font-size: 12px; color: rgba(255,255,255,.35); line-height: 1.7; margin-top: 16px; }
+.footer-legal a { color: rgba(255,255,255,.45); text-decoration: none; }
+.footer-legal a:hover { color: rgba(255,255,255,.75); }
+.footer-col { flex: 1; min-width: 120px; }
+.footer-col-title { font-size: 12px; font-weight: 700; color: rgba(255,255,255,.6); text-transform: uppercase; letter-spacing: .9px; margin-bottom: 14px; }
+.footer-col a { display: block; font-size: 14px; color: rgba(255,255,255,.4); text-decoration: none; margin-bottom: 10px; transition: color .2s; }
+.footer-col a:hover { color: rgba(255,255,255,.8); }
+.footer-bottom { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; font-size: 12px; color: rgba(255,255,255,.25); }
+.footer-bottom a { color: rgba(255,255,255,.25); text-decoration: none; }
+.footer-bottom a:hover { color: rgba(255,255,255,.5); }
+
+/* ── RESPONSIVE ── */
+@media (max-width: 900px) {
+  nav { padding: 0 24px; }
+  .nav-links { display: none; }
+  .wf-hero { padding: 56px 24px 40px; }
+  .wf-hero h1 { font-size: 36px; }
+  .section { padding: 64px 24px; }
+  .sources { padding: 48px 24px 64px; }
+  .wf-cta { padding: 56px 24px; }
+  footer { padding: 48px 24px 24px; }
+}
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <a class="logo" href="/index.html">
+    <div class="logo-mark"><div class="logo-mark-inner">🍕</div></div>
+    <span class="logo-text">SprintAI</span>
+  </a>
+  <ul class="nav-links">
+    <li><a href="/index.html#how">How it works</a></li>
+    <li><a href="/index.html#different">What's different</a></li>
+    <li><a href="/index.html#pricing">Pricing</a></li>
+    <li><a href="/index.html#faq">FAQ</a></li>
+  </ul>
+  <div class="nav-right">
+    <a class="btn-nav" href="/index.html#signup">Get a number for your shop →</a>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section style="background: linear-gradient(180deg, #FFF8F3 0%, var(--cream) 100%);">
+  <div class="wf-hero">
+    <div class="eyebrow" style="text-align:center;">Why OrderFare</div>
+    <h1>One flat $1.49. Real menu prices. That's it.</h1>
+    <p class="wf-hero-sub">No percentage service fee. No marked-up menu. Text your order to the restaurant and pay what the counter charges, plus $1.49.</p>
+  </div>
+</section>
+
+<!-- THE LINE ITEM -->
+<section class="section">
+  <div class="eyebrow">What you pay</div>
+  <h2 class="section-title">The line item you see.</h2>
+  <p class="section-sub">Delivery-app service fees scale with your order. Ours doesn't.</p>
+  <div class="cmp-table-wrap">
+    <table class="cmp-table">
+      <thead>
+        <tr><th>Fee</th><th>$15 order</th><th>$30 order</th><th>$60 order</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>DoorDash service fee (10-15%)</td>
+          <td data-label="$15 order">$1.50-2.25</td>
+          <td data-label="$30 order">$3.00-4.50</td>
+          <td data-label="$60 order">$6.00-9.00</td>
+        </tr>
+        <tr>
+          <td>Uber Eats service fee (~15%)</td>
+          <td data-label="$15 order">$2.25</td>
+          <td data-label="$30 order">$4.50</td>
+          <td data-label="$60 order">$9.00</td>
+        </tr>
+        <tr class="good">
+          <td>OrderFare</td>
+          <td data-label="$15 order">$1.49</td>
+          <td data-label="$30 order">$1.49</td>
+          <td data-label="$60 order">$1.49</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="cmp-note">Our fee is flat. Theirs grows with your order.</p>
+
+  <div class="calc-box" id="calc-b">
+    <label for="calc-input">Your order: $</label>
+    <input type="number" id="calc-input" min="1" step="1" value="30" inputmode="decimal">
+    <span class="calc-hint" id="calc-b-out"></span>
+  </div>
+</section>
+
+<hr class="warm">
+
+<!-- THE PART YOU DON'T SEE -->
+<section class="section">
+  <div class="eyebrow">What the restaurant pays</div>
+  <h2 class="section-title">The part you don't see.</h2>
+  <p class="section-sub">Restaurants typically raise their app menu prices 15-25% to cover the apps' 15-30% commission (independents often less, chains up to 30%). On OrderFare, the restaurant pays no commission, so the menu you see is the counter menu.</p>
+  <div class="cmp-table-wrap">
+    <table class="cmp-table">
+      <thead>
+        <tr><th>Menu impact</th><th>$15 order</th><th>$30 order</th><th>$60 order</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Hidden menu uplift on the apps (15-25%)</td>
+          <td data-label="$15 order">$2.25-3.75</td>
+          <td data-label="$30 order">$4.50-7.50</td>
+          <td data-label="$60 order">$9.00-15.00</td>
+        </tr>
+        <tr class="good">
+          <td>OrderFare</td>
+          <td data-label="$15 order">$0</td>
+          <td data-label="$30 order">$0</td>
+          <td data-label="$60 order">$0</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="calc-box" id="calc-c">
+    <label for="calc-input-c">Your order: $</label>
+    <input type="number" id="calc-input-c" min="1" step="1" value="30" inputmode="decimal">
+    <span class="calc-hint" id="calc-c-out"></span>
+  </div>
+</section>
+
+<hr class="warm">
+
+<!-- PUT TOGETHER -->
+<section class="section">
+  <div class="eyebrow">Put together</div>
+  <h2 class="section-title">On a $30 order.</h2>
+  <div class="big-compare">
+    <div class="big-card">
+      <div class="big-num">$7.50-12.00</div>
+      <div class="big-lbl">In fees and uplift, before tip</div>
+      <div class="big-sub">DoorDash-style service fee plus hidden menu uplift, combined</div>
+    </div>
+    <div class="big-card featured">
+      <div class="big-num good">$1.49</div>
+      <div class="big-lbl">OrderFare</div>
+      <div class="big-sub">One flat fee. Counter menu prices. Nothing else added.</div>
+    </div>
+  </div>
+  <p class="fine-note">Delivery fees are the restaurant's own and are not included on either side. Tips go 100% to the restaurant or driver.</p>
+  <div class="calc-box" id="calc-d">
+    <label for="calc-input-d">Your order: $</label>
+    <input type="number" id="calc-input-d" min="1" step="1" value="30" inputmode="decimal">
+    <span class="calc-hint" id="calc-d-out"></span>
+  </div>
+</section>
+
+<hr class="warm">
+
+<!-- WHAT THE RESTAURANT KEEPS -->
+<section class="section">
+  <div class="eyebrow">What the restaurant keeps</div>
+  <h2 class="section-title">The other side of the same order.</h2>
+  <div class="keeps-box">
+    <p>On that same $30 order, the restaurant keeps the $4.50-9.00 it would have otherwise paid in commission to a delivery app. OrderFare charges the restaurant a flat $99/month plan instead - see the <a href="/how-it-works.html">pricing details on how it works</a>.</p>
+  </div>
+</section>
+
+<!-- SOURCES -->
+<div class="sources">
+  <h2>Sources</h2>
+  <ol>
+    <li><a href="https://about.doordash.com/en-us/news/updating-our-fee-structure" target="_blank" rel="noopener">DoorDash: Updating Our Fee Structure</a> (accessed 2026-09-26)</li>
+    <li>Restaurant Business Online: <a href="https://www.restaurantbusinessonline.com/technology/doordash-unveils-tiered-pricing-plan-restaurants" target="_blank" rel="noopener">"DoorDash unveils tiered pricing plan for restaurants"</a> (accessed 2026-09-26)</li>
+    <li><a href="https://takeout.ai/blog/doordash-vs-uber-eats-2026" target="_blank" rel="noopener">Takeout.ai: DoorDash vs Uber Eats fee comparison, 2026</a> (accessed 2026-09-26)</li>
+    <li><a href="https://www.yahoo.com/lifestyle/study-determines-chains-delivery-platforms-150000968.html" target="_blank" rel="noopener">Yahoo Lifestyle: study on menu markups by chains on delivery platforms</a> (accessed 2026-09-26)</li>
+    <li><a href="https://merchants.doordash.com/en-us/learning-center/menu-pricing-insights" target="_blank" rel="noopener">DoorDash Merchant Learning Center: menu pricing insights</a> (accessed 2026-09-26)</li>
+  </ol>
+</div>
+
+<!-- CTA -->
+<div class="wf-cta">
+  <h2>Real menu prices. One flat fee.</h2>
+  <p>See what your customers actually pay when they text you their order.</p>
+  <a class="btn-cta" href="/signup-page/">Get a number for your shop →</a>
+  <br>
+  <a class="wf-cta-secondary" href="/how-it-works.html">See how it works</a>
+</div>
+
+<!-- FOOTER -->
+<footer>
+  <div class="footer-top">
+    <div class="footer-brand-col">
+      <div class="footer-logo">🍕 SprintAI</div>
+      <div class="footer-tagline">Ordering that feels like texting a friend. A text line for small shops and the customers who'd rather not call.</div>
+      <div class="footer-legal">
+        SprintAI LLC<br />
+        5620 Cetronia Rd, Allentown, PA 18106<br />
+        <a href="mailto:jason@getsprintai.com">jason@getsprintai.com</a>
+      </div>
+    </div>
+    <div class="footer-col">
+      <div class="footer-col-title">Product</div>
+      <a href="#how">How it works</a>
+      <a href="/why-orderfare.html">Why OrderFare</a>
+      <a href="#different">What's different</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#signup">Get started</a>
+    </div>
+    <div class="footer-col">
+      <div class="footer-col-title">Support</div>
+      <a href="#">Help center</a>
+      <a href="#">Setup guide</a>
+      <a href="#">Talk to us</a>
+      <a href="#">System status</a>
+    </div>
+    <div class="footer-col">
+      <div class="footer-col-title">Company</div>
+      <a href="#">About</a>
+      <a href="#">Blog</a>
+      <a href="#">Lehigh Valley roots</a>
+      <a href="/contact.html">Contact</a>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <div>© 2026 SprintAI LLC · Serving shops in PA &amp; NJ</div>
+    <div style="display:flex;gap:20px;">
+      <a href="/privacy.html">Privacy Policy</a>
+      <a href="/terms.html">Terms of Service</a>
+      <a href="#">TCPA Compliance</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+// ── LIVE CALCULATOR (pure client-side, no tracking) ──
+(function () {
+  var fmt = function (n) {
+    return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+  var range = function (lowPct, highPct, subtotal) {
+    var lo = subtotal * lowPct;
+    var hi = subtotal * highPct;
+    if (lowPct === highPct) return fmt(lo);
+    return fmt(lo) + '-' + fmt(hi);
+  };
+  var inputs = [
+    document.getElementById('calc-input'),
+    document.getElementById('calc-input-c'),
+    document.getElementById('calc-input-d')
+  ];
+  var outs = {
+    b: document.getElementById('calc-b-out'),
+    c: document.getElementById('calc-c-out'),
+    d: document.getElementById('calc-d-out')
+  };
+
+  function recompute(subtotal) {
+    if (!subtotal || subtotal <= 0) return;
+    outs.b.textContent = 'DoorDash: ' + range(0.10, 0.15, subtotal) + ' · Uber Eats: ' + range(0.15, 0.15, subtotal) + ' · OrderFare: $1.49';
+    outs.c.textContent = 'Hidden menu uplift: ' + range(0.15, 0.25, subtotal) + ' · OrderFare: $0';
+    var ddLow = subtotal * 0.10, ddHigh = subtotal * 0.15;
+    var upLow = subtotal * 0.15, upHigh = subtotal * 0.25;
+    outs.d.textContent = 'Apps combined: ' + fmt(ddLow + upLow) + '-' + fmt(ddHigh + upHigh) + ' · OrderFare: $1.49';
+  }
+
+  inputs.forEach(function (el) {
+    if (!el) return;
+    el.addEventListener('input', function () {
+      var v = parseFloat(el.value);
+      inputs.forEach(function (other) { if (other && other !== el) other.value = el.value; });
+      recompute(v);
+    });
+  });
+
+  recompute(30);
+})();
+</script>
+</body>
+</html>
