@@ -116,7 +116,7 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
       return T.picks(item.display_name, q.remaining, item.bundle.count, item.bundle.unit, flavors, count);
     }
     case "line_ref": {
-      const names = q.candidates.map((id) => { const [l, it] = lineAndItem(form, menu, id); return it ? `${l!.qty} × ${it.display_name}` : (l?.span ?? "?"); });
+      const names = q.candidates.map((id) => { const [l, it] = lineAndItem(form, menu, id); return it ? `${l!.qty} x ${it.display_name}` : (l?.span ?? "?"); });
       return T.lineRef(names);
     }
   }
@@ -182,7 +182,7 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
       ].join("\n"));
     } else if (q.kind === "handoff") {
       const pay = `${q.relink ? T.relink() + " " : ""}${T.handoff(q.url)} ${T.afterPay(form.fulfillment === "delivery")}`.trim();
-      parts.push(q.relink ? [T.readbackHeader(form.fulfillment, withoutCountry(form.address?.formatted ?? form.address?.text ?? "") || null, false), ...receiptRows(q.totals).map((r, k) => `${k + 1}) ${r}`), moneyLine(q.totals), pay].join("\n") : pay);
+      parts.push(q.relink ? `${T.relinkTotal(dollars(q.totals.total_cents))} ${pay}` : pay); // the customer confirmed the whole order once; a change shows the change and the new total
     }
   }
   // short one-line parts read as one message ("Added 1 × Garlic Knots. Anything else?"); anything with a list keeps its own block

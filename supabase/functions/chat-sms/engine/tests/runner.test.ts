@@ -229,7 +229,7 @@ Deno.test("runner: the voice rewrites a short reply when it keeps every fact, an
     out = await runEngineTurn({ ...base, message: "garlic knots", cart: { ...base.cart, engine_form: out.form } }, d);
     return out.reply;
   };
-  assertEquals(await say((d) => d.replace("Added 1 × Garlic Knots (6). Anything else?", "One order of Garlic Knots (6), got it. Anything else?")), "One order of Garlic Knots (6), got it. Anything else?");
+  assertEquals(await say((d) => d.replace("Added 1 x Garlic Knots (6). Anything else?", "One order of Garlic Knots (6), got it. Anything else?")), "One order of Garlic Knots (6), got it. Anything else?");
   const draft = await say((d) => d); // an identical rewrite passes too
   assertStringIncludes(draft, "Garlic Knots (6)");
   assertEquals(await say((d) => d.replace("Anything else?", "Anything else? Your total is $6.34.")), draft); // an invented number: the draft
@@ -246,7 +246,7 @@ Deno.test("runner: a change after the pay link expires the old session, creates 
   out = await runEngineTurn({ ...base, message: "wait add a cheesesteak too", cart: { ...base.cart, engine_form: out.form, stripe_checkout_session_id: out.form.checkout_session_id } }, d);
   assertEquals(d.expired, ["cs_test_1"]);
   assertEquals(d.created.length, 2);
-  assertStringIncludes(out.reply, "Here's the updated order for pickup:");
+  assertStringIncludes(out.reply, "Total is now");
   assertStringIncludes(out.reply, "earlier link won't work anymore. Pay here: https://pay.example/o/abc");
   assertEquals(out.form.status, "awaiting_payment");
 });

@@ -308,7 +308,8 @@ export function turn(input: TurnInput): TurnOutput {
   }
   if (q?.kind === "items" && form.items_done && !form.relink && form.lines.every((l) => l.status.kind !== "complete")) { form.items_done = false; form.confirmed = false; form.status = "open"; } // a swap after the link leaves one pending line: the order is still "done", and relinks once that line is whole
   if (q?.kind === "confirm") form.status = "confirming";
-  const handoff = q === null && form.confirmed && form.status === "awaiting_payment";
+  const remarkAfterLink = q === null && form.confirmed && form.status === "awaiting_payment" && !!input.checkoutUrl && res.talk !== null && !res.ledger.some(isProgress); // "thanks, on my way" after the link: the remark, not the link again (two segments each time)
+  const handoff = q === null && form.confirmed && form.status === "awaiting_payment" && !remarkAfterLink;
 
   // 7. the plan
   const acks: Ack[] = [];

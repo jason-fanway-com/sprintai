@@ -132,7 +132,7 @@ export function faithfulRewrite(draft: string, text: string): string | null {
   const lost = dn.find((n) => !tn.includes(n)) ?? [...names(draft)].find((n) => !low.includes(n)), made = tn.find((n) => !dn.includes(n)) ?? [...names(text)].find((n) => !plural(n));
   if (lost) return `dropped ${lost}`; if (made) return `invented ${made}`;
   if (draft.includes("?") && !text.includes("?")) return "lost the question"; if (talkClaimsTime(text) && !talkClaimsTime(draft)) return "invented a time";
-  return /\b(text|call|notify|message|ping)\b.*\b(you|when|once)\b/i.test(text) ? "promised contact" : text.length > draft.length * 1.6 + 60 ? "too long" : null;
+  return /\b(text|call|notify|message|ping)\b.*\b(you|when|once)\b/i.test(text) ? "promised contact" : text.length > draft.length + 20 ? "too long" : null;
 }
 
 /** "5620 Cetronia Rd, Allentown, PA 18106, USA" as a person would text it: without the country. */

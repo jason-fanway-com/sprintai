@@ -115,3 +115,10 @@ Deno.test(`rule: adapters stay under ${ADAPTER_BUDGET} lines`, async () => {
   const { total, per } = await lineTotal(ADAPTERS);
   assert(total <= ADAPTER_BUDGET, `adapters are ${total} lines (${per.join(", ")}); budget ${ADAPTER_BUDGET}.`);
 });
+
+Deno.test("rule: templates.ts contains no character outside GSM-7 (each one doubles the SMS segments)", async () => {
+  const src = await read("templates.ts");
+  const bad = [...new Set([...src].filter((c) => c.charCodeAt(0) > 127 && !"£¥èéùìòÇØøÅåΔΦΓΛΩΠΨΣΘΞÆæßÉ¤¡ÄÖÑÜ§¿äöñüà€".includes(c)))];
+  assertEquals(bad, []);
+});
+

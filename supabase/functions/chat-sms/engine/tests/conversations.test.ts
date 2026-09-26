@@ -38,8 +38,8 @@ Deno.test("worked conversation: delivery, three items, narrowing, tip, confirm",
   assertEquals(f.lines[0].item_id, IDS.pepPizzaL);
   assertEquals(f.lines[0].qty, 2);
   assertEquals(f.lines[1].item_id, IDS.knots);
-  assertStringIncludes(o.reply, "2 × Large Pepperoni Pizza");
-  assertStringIncludes(o.reply, "2 × Large Pepperoni Pizza");
+  assertStringIncludes(o.reply, "2 x Large Pepperoni Pizza");
+  assertStringIncludes(o.reply, "2 x Large Pepperoni Pizza");
   assertStringIncludes(o.reply, "Anything else?");
   assertEquals(f.open?.kind, "items");
 
@@ -51,9 +51,9 @@ Deno.test("worked conversation: delivery, three items, narrowing, tip, confirm",
   assertEquals(f.lines[1].qty, 2);
   // "small cheese": partial match over cheese items, "small" narrows to the one sized small
   assertEquals(f.lines[2].item_id, IDS.cheesePizzaS, o.reply);
-  assertStringIncludes(o.reply, "Updated: 2 × Garlic Knots (6).");
+  assertStringIncludes(o.reply, "Updated: 2 x Garlic Knots (6).");
   assertStringIncludes(o.reply, "Small Cheese Pizza");
-  assertStringIncludes(o.reply, "Added 1 × Small Cheese Pizza.");
+  assertStringIncludes(o.reply, "Added 1 x Small Cheese Pizza.");
   assertEquals(f.open?.kind, "items");
 
   o = say(f, "thats it");
@@ -133,7 +133,7 @@ Deno.test("narrowing: pizza -> what kind -> pepperoni -> what size -> large", ()
   assertStringIncludes(o.reply, "Small, Medium, or Large");
   o = say(o.form, "large");
   assertEquals(o.form.lines[0].item_id, IDS.pepPizzaL);
-  assertStringIncludes(o.reply, "Added 1 × Large Pepperoni Pizza");
+  assertStringIncludes(o.reply, "Added 1 x Large Pepperoni Pizza");
 });
 
 Deno.test("corrections: X not Y, quantity change, remove with one line and with two", () => {
@@ -358,7 +358,7 @@ Deno.test("answering a kind question with the category word works too", () => {
   let o = say(f, "pepperoni", [{ kind: "add_line", item_span: "pepperoni", qty: 1, option_spans: [] }]);
   o = say(o.form, "the stromboli", [{ kind: "answer_option", value_span: "stromboli" }]);
   assertEquals(o.form.lines[0].item_id, "roll");
-  assertStringIncludes(o.reply, "Added 1 × Pepperoni");
+  assertStringIncludes(o.reply, "Added 1 x Pepperoni");
   assert(!o.reply.split("\n")[0].includes("$"), "no price in the acknowledgement");
 });
 
@@ -397,7 +397,7 @@ Deno.test("bundle: a dozen bagels asks for flavors, takes counts across turns, p
   o = say(o.form, "sesame", [{ kind: "answer_option", value_span: "sesame" }]);
   assertEquals(o.form.lines[0].status.kind, "complete");
   assertEquals(o.form.lines[0].selections, { "bg-plain": 6, "bg-every": 4, "bg-sesame": 2 });
-  assertStringIncludes(o.reply, "1 × One Dozen Bagels (6 Plain Bagel, 4 Everything Bagel, 2 Sesame Bagel)");
+  assertStringIncludes(o.reply, "1 x One Dozen Bagels (6 Plain Bagel, 4 Everything Bagel, 2 Sesame Bagel)");
   assertEquals(totals(o.form, menu).subtotal_cents, 1500);
 });
 
@@ -783,7 +783,7 @@ Deno.test("phone test 5: 'Chicken parm' never becomes the $12.49 'Chicken' quesa
   const parm = o.form.lines.find((l) => l.span === "Chicken parm")!;
   assert(parm.item_id !== "chq", "bare 'chicken' term must not win");
   assertEquals(parm.status.kind, "ambiguous"); // sandwich vs entree: a question, never a guess
-  assert(!o.reply.includes("Added 1 × Chicken "), o.reply);
+  assert(!o.reply.includes("Added 1 x Chicken "), o.reply);
   // the bare word alone still finds the quesadilla
   const q = say(f, "a chicken", [{ kind: "add_line", item_span: "chicken", qty: 1, option_spans: [] }]);
   assertEquals(q.form.lines[0].item_id, "chq");
@@ -851,7 +851,7 @@ Deno.test("phone test 6: the pay line promises a wait, not a text", () => {
   let o = say(f, "garlic knots", [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
   o = say(o.form, "thats it"); o = say(o.form, "yes");
   assert(!o.reply.includes("text you"), o.reply);
-  assertStringIncludes(o.reply, "10-15 minutes");
+  assertStringIncludes(o.reply, "10-15 min");
 });
 
 Deno.test("tester pass 1: 'chicken wings' is the wings category, never the 'Chicken' quesadilla", () => {
@@ -1127,7 +1127,7 @@ Deno.test("tester pass 5: an answer to a waiting line's slot lands there while a
   p = say(p.form, "ranch");
   assertStringIncludes(p.reply, "Ranch for the Cheesesteak / Chicken Cheesesteak Salad.");
   p = say(p.form, "chicken");
-  assertStringIncludes(p.reply, "Added 1 × Cheesesteak / Chicken Cheesesteak Salad (Ranch, Chicken)");
+  assertStringIncludes(p.reply, "Added 1 x Cheesesteak / Chicken Cheesesteak Salad (Ranch, Chicken)");
   assertEquals(p.form.lines[1].modifiers.length, 0);
   assert(p.form.lines[0].status.kind !== "complete", p.reply);
 });
@@ -1333,16 +1333,16 @@ Deno.test("ask, don't guess: the read-back says a robot built it and takes corre
   f = say(f, "pickup").form;
   let o = say(f, "a cheesesteak and garlic knots", [{ kind: "add_line", item_span: "cheesesteak", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
   o = say(o.form, "thats it");
-  assertStringIncludes(o.reply, "I'm a robot, and I do make mistakes");
-  assertStringIncludes(o.reply, "Reply YES if that's right");
+  assertStringIncludes(o.reply, "I'm a robot and I make mistakes");
+  assertStringIncludes(o.reply, "Reply YES for your pay link");
   o = say(o.form, "actually make it 2 cheesesteaks and drop the knots", [{ kind: "change_line", ref: { span: "cheesesteaks" }, qty: 2, add_option_spans: [], remove_option_spans: [] }, { kind: "remove_line", ref: { span: "knots" } }]);
   assertEquals(o.form.lines.map((l) => [l.item_id, l.qty]), [[IDS.cheesesteak, 2]], o.reply);
-  assertStringIncludes(o.reply, "Here's the updated order for pickup:"); // corrected, and read back again for a fresh YES (the robot line only once)
+  assertStringIncludes(o.reply, "Updated order for pickup:"); // corrected, and read back again for a fresh YES (the robot line only once)
   o = say(o.form, "yes");
-  assert(!o.reply.includes("Here's what I have"), o.reply); // confirmed: on to the payment link
+  assert(!o.reply.includes("here's your order"), o.reply); // confirmed: on to the payment link
   o = say(o.form, "wait add garlic knots too", [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
   assertEquals(o.form.lines.length, 2, o.reply);
-  assertStringIncludes(o.reply, "Here's the updated order for pickup:"); // a change after the link re-shows the read-back, never charges silently
+  assertStringIncludes(o.reply, "Total is now"); // a change after the link: the change, the new total and a fresh link
 });
 
 Deno.test("ask, don't guess: a re-ask names what we heard; two answers to one slot ask between them; an unreadable answer is never a kitchen note", () => {
@@ -1368,7 +1368,7 @@ Deno.test("finer touches: identical lines merge, 'take one off' lowers the count
   let f = newForm("vitos", "test-v1");
   f = say(f, "pickup").form;
   let o = say(f, "garlic knots", [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
-  assertStringIncludes(o.reply, "Added 1 × Garlic Knots (6). Anything else?"); // one line, not a printout
+  assertStringIncludes(o.reply, "Added 1 x Garlic Knots (6). Anything else?"); // one line, not a printout
   o = say(o.form, "add two more garlic knots", [{ kind: "add_line", item_span: "garlic knots", qty: 2, option_spans: [] }]);
   assertEquals(o.form.lines.map((l) => [l.item_id, l.qty]), [[IDS.knots, 3]], o.reply);
   o = say(o.form, "ok thats one too many, take one off", [{ kind: "remove_line", ref: { span: "garlic knots" } }]);
@@ -1376,7 +1376,7 @@ Deno.test("finer touches: identical lines merge, 'take one off' lowers the count
   o = say(o.form, "thats it");
   assertStringIncludes(o.reply, "I'm a robot");
   o = say(o.form, "add a cheesesteak", [{ kind: "add_line", item_span: "cheesesteak", qty: 1, option_spans: [] }]);
-  assertStringIncludes(o.reply, "Here's the updated order");
+  assertStringIncludes(o.reply, "Updated order");
   assert(!o.reply.includes("robot"), o.reply);
 });
 
@@ -1391,13 +1391,13 @@ Deno.test("finer touches: 'do you have X?' is answered and offered; 'did you add
   o = say(o.form, "yes");
   assertEquals(o.form.lines.map((l) => l.item_id), [IDS.knots], o.reply);
   o = say(o.form, "did you add the garlic knots?", [{ kind: "control", what: "unclear" }]); // the model shrugs; the engine knows
-  assertStringIncludes(o.reply, "Yes, 1 × Garlic Knots (6) is on your order.");
+  assertStringIncludes(o.reply, "Yes, 1 x Garlic Knots (6) is on your order.");
   assert(!o.reply.includes("Did you also want"), o.reply);
   assertEquals(o.form.lines.length, 1);
   o = say(o.form, "do you have a cheesesteak?", [{ kind: "ask_menu", about_span: "cheesesteak" }]); // an item whose name IS the term: offered, accepted, then asked about
   o = say(o.form, "yes");
   o = say(o.form, "did you add the cheesesteak?", [{ kind: "control", what: "unclear" }]);
-  assertStringIncludes(o.reply, "Yes, 1 × Cheesesteak is on your order.");
+  assertStringIncludes(o.reply, "Yes, 1 x Cheesesteak is on your order.");
   assertEquals(o.form.lines.length, 2);
   let p = say(f, "add two zorgblats", [{ kind: "add_line", item_span: "zorgblats", qty: 2, option_spans: [] }]);
   assertStringIncludes(p.reply, "couldn't find");
@@ -1421,19 +1421,19 @@ Deno.test("finer touches: 'do you have X?' is answered and offered; 'did you add
 });
 
 Deno.test("voice: a rewrite must keep every number and name, keep the question, and invent nothing", () => {
-  const draft = `Added 2 × Hot Dog. Anything else?`;
+  const draft = `Added 2 x Hot Dog. Anything else?`;
   assertEquals(faithfulRewrite(draft, "Two hot dogs added. Anything else?"), null);
   assertEquals(faithfulRewrite(draft, "Two hot dogs added. Anything else for you?"), null);
   assertEquals(faithfulRewrite(draft, "Two hot dogs added."), "lost the question");
   assertEquals(faithfulRewrite(draft, "Two hot dogs and a Large Cheese Pizza added. Anything else?"), "invented large cheese pizza");
   assertEquals(faithfulRewrite(draft, "Two hot dogs added, $11.98. Anything else?"), "invented 11.98");
-  assertEquals(faithfulRewrite("Added 1 × Garlic Knots (6). Anything else?", "One order of garlic knots, got it. Anything else?"), "dropped 6"); // the (6) is a fact
-  assertEquals(faithfulRewrite("Added 1 × Garlic Knots (6). Anything else?", "Garlic Knots (6), got it. Anything else?"), null);
+  assertEquals(faithfulRewrite("Added 1 x Garlic Knots (6). Anything else?", "One order of garlic knots, got it. Anything else?"), "dropped 6"); // the (6) is a fact
+  assertEquals(faithfulRewrite("Added 1 x Garlic Knots (6). Anything else?", "Garlic Knots (6), got it. Anything else?"), null);
   assertEquals(faithfulRewrite("Chicken Parmesan Sandwich: what bread? White, Rye, or Wheat?", "What bread for the Chicken Parmesan Sandwich? White, Rye, or Wheat?"), null);
   assertEquals(faithfulRewrite("Chicken Parmesan Sandwich: what bread? White, Rye, or Wheat?", "What bread for the Chicken Parmesan Sandwich? White or Wheat?"), "dropped rye");
   assertEquals(faithfulRewrite("Anything else?", "Anything else? It'll be ready in 15 minutes."), "invented 15");
   assertEquals(faithfulRewrite("Yes, we do. Hot Dog: Served with fries. Want one?", "Yeah we do, the Hot Dog comes with fries. You want one?"), null); // "Served" after the colon is scaffolding
-  assertEquals(faithfulRewrite("Updated: 3 × Hot Dog. Anything else?", "Got it, so that's 3 Hot Dogs total now. Anything else?"), null); // a plural of a name is the name
+  assertEquals(faithfulRewrite("Updated: 3 x Hot Dog. Anything else?", "Got it, so that's 3 Hot Dogs total now. Anything else?"), null); // a plural of a name is the name
 });
 
 Deno.test("phone test 09-26: a change after the pay link sends the updated order and a fresh link together; asking for the link at the read-back is a yes", () => {
@@ -1448,8 +1448,8 @@ Deno.test("phone test 09-26: a change after the pay link sends the updated order
   assertEquals(o.form.lines[0].qty, 3, o.reply);
   assertEquals(o.form.confirmed, true, o.reply); // no second YES
   assertEquals(o.form.status, "awaiting_payment");
-  assertStringIncludes(o.reply, "Here's the updated order for pickup:");
-  assertStringIncludes(o.reply, "3 × Cheesesteak");
+  assertStringIncludes(o.reply, "Total is now");
+  assertStringIncludes(o.reply, "3 x Cheesesteak");
   assertStringIncludes(o.reply, "Your total changed, so the earlier link won't work anymore.");
   assert(!o.reply.includes("Reply YES"), o.reply);
   assert(o.ledger.some((e) => e.event === "relink_after_change"));
@@ -1486,5 +1486,19 @@ Deno.test("end-of-order edits: a tip change after the link remakes the link; 'sw
   assertEquals(r.form.lines.map((l) => l.item_id), [IDS.houseSalad], r.reply);
   assertEquals(r.form.status, "awaiting_payment", r.reply);
   assertStringIncludes(r.reply, "earlier link won't work");
+});
+
+Deno.test("SMS cost: every reply is plain GSM-7 text (one stray character doubles the segments); a remark after the link gets the remark, not the pay sentence", () => {
+  const GSM = new Set("@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà^{}\\[~]|€");
+  let f = newForm("vitos", "test-v1");
+  const replies: string[] = [];
+  const go = (msg: string, moves: Move[] = []) => { const o = say(f, msg, moves); f = o.form; replies.push(o.reply); return o; };
+  go("delivery"); go("123 Main St", [addr("123 Main St")]);
+  go("a cheesesteak and 2 garlic knots", [{ kind: "add_line", item_span: "cheesesteak", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "garlic knots", qty: 2, option_spans: [] }]);
+  go("what do i have so far", [{ kind: "control", what: "show_cart" }]);
+  go("thats it"); go("15"); go("yes");
+  const link = go("add cheese fries", [{ kind: "add_line", item_span: "cheese fries", qty: 1, option_spans: [] }]);
+  assertStringIncludes(link.reply, "Total is now"); assert(!link.reply.includes("1)"), link.reply); // the change and the new total, not the whole read-back again
+  for (const r of replies) for (const c of r) assert(GSM.has(c), `non-GSM character ${JSON.stringify(c)} in: ${r}`);
 });
 

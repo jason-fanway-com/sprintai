@@ -16,6 +16,7 @@ import { logError } from "../_shared/error-log.ts";
 import { SERVICE_FEE_CENTS } from "../_shared/connect.ts";
 import { getTestModeStripeKey } from "../_shared/test-mode.ts";
 import { classifyTelnyxSendError } from "../_shared/telnyx-error.ts";
+import { toGsm7 } from "../_shared/gsm7.ts";
 import { dayWindows } from "../_shared/hours.ts";
 
 // A proposal-worthy event detected mechanically (detectUnitCompletionEvent),
@@ -685,6 +686,7 @@ async function sendSmsViaTwilio(
   message:    string,
   messageId?: string | null,
 ): Promise<void> {
+  message = toGsm7(message); // one non-GSM character doubles the segments
   const accountSid = Deno.env.get("TWILIO_ACCOUNT_SID") ?? "";
   const authToken  = Deno.env.get("TWILIO_AUTH_TOKEN")  ?? "";
 
@@ -772,6 +774,7 @@ async function sendSmsViaTelnyx(
   message:    string,
   messageId?: string | null,
 ): Promise<void> {
+  message = toGsm7(message); // one non-GSM character doubles the segments
   const apiKey = Deno.env.get("TELNYX_API_KEY") ?? "";
   if (!apiKey) {
     console.error("[chat-sms] Telnyx API key not configured");
@@ -2269,7 +2272,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       cart.phase = "greeting";
       cart.notes = null;
       cart.delivery_offer_made_at = null;
-      const ack = "You're in test mode 🧪 Order just like it's the real thing — the kitchen's open and this behaves exactly like a live order. At checkout you'll use a test card, and you won't be charged a cent.";
+      const ack = "Test mode: order just like it's real. At checkout you'll use a test card and won't be charged a cent.";
       await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
       {
         const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", ack)).id;

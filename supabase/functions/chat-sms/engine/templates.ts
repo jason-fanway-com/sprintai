@@ -1,4 +1,4 @@
-// templates.ts — every string a customer can read. Nothing else in the engine
+// templates.ts - every string a customer can read. Nothing else in the engine
 // builds customer-facing text. Money arrives here already formatted by price.ts.
 
 export interface Voice { shop_name: string; phone_display: string | null }
@@ -20,9 +20,9 @@ export const T = {
 
   // acknowledgements
   ackLine: (qty: number, name: string, money: string | null, extras: string[]) =>
-    `${qty} × ${name}${extras.length ? ` (${extras.join(", ")})` : ""}${money ? `  ${money}` : ""}`,
-  ackAdded: (rows: string[]) => (rows.length === 1 ? `Added ${rows[0].trim()}.` : `Added:\n${rows.join("\n")}`),
-  ackUpdated: (rows: string[]) => (rows.length === 1 ? `Updated: ${rows[0].trim()}.` : `Updated:\n${rows.join("\n")}`),
+    `${qty} x ${name}${extras.length ? ` (${extras.join(", ")})` : ""}${money ? ` ${money}` : ""}`,
+  ackAdded: (rows: string[]) => (rows.length <= 3 ? `Added ${rows.map((r) => r.trim()).join(", ")}.` : `Added:\n${rows.join("\n")}`), // three or fewer read as one line: fewer segments
+  ackUpdated: (rows: string[]) => (rows.length <= 3 ? `Updated: ${rows.map((r) => r.trim()).join(", ")}.` : `Updated:\n${rows.join("\n")}`),
   ackRemoved: (names: string[]) => `Removed ${orList(names).replace(" or ", " and ")}.`,
   ackFulfillment: (f: "pickup" | "delivery") => (f === "pickup" ? "Got it, pickup." : "Got it, delivery."),
   ackAddress: (text: string) => `Delivery to ${text}.`,
@@ -69,25 +69,26 @@ export const T = {
     `Reply 0 for no tip, or a number for a percent.`,
   ][Math.min(c, 2)],
   confirmAsk: (c: number) => [
-    `Reply YES if that's right and I'll send your payment link, or tell me what to change.`,
+    `Reply YES for your pay link, or tell me what to change.`,
     `Is that right? Reply YES to pay, or tell me what to change.`,
-    `Reply YES to get your payment link, or NO to change something.`,
+    `Reply YES to get your pay link, or NO to change something.`,
   ][Math.min(c, 2)],
   // Jason, 2026-09-24: the customer's confirmation is the final safeguard; say plainly that a robot built this
   readbackHeader: (f: "pickup" | "delivery" | null, address: string | null, first = true) =>
-    `${first ? "Just to be sure I got everything right (I'm a robot, and I do make mistakes). Here's what I have" : "Here's the updated order"} for ${f === "delivery" && address ? `delivery to ${address}` : "pickup"}:`,
+    `${first ? "Just to be sure I got it right (I'm a robot and I make mistakes), here's your order" : "Updated order"} for ${f === "delivery" && address ? `delivery to ${address}` : "pickup"}:`,
+  relinkTotal: (total: string) => `Total is now ${total}.`,
   gotcha: () => `Oh, gotcha.`,
   yesWeHave: () => `Yes, we do.`,
   offer: (n: number) => n > 1 ? `Want to add them?` : `Want one?`,
-  cartHas: (qty: number, name: string) => `Yes, ${qty > 1 ? `${qty} × ${name} are` : `1 × ${name} is`} on your order.`,
+  cartHas: (qty: number, name: string) => `Yes, ${qty > 1 ? `${qty} x ${name} are` : `1 x ${name} is`} on your order.`,
   cartLacks: (name: string) => `No ${name} on your order yet.`,
   missed: (heard: string, what: string) => `Sorry, I didn't catch "${heard}" as ${what}.`,
-  moneyLine: (parts: string[]) => parts.join(" · "),
+  moneyLine: (parts: string[]) => parts.join(" | "),
   relink: () => `Your total changed, so the earlier link won't work anymore.`,
   handoff: (url: string | null) => (url ? `Pay here: ${url}` : `I couldn't create your payment link just now.`),
   checkoutFailed: () => `I couldn't create your payment link just now. Reply YES to try again.`,
   // the same wait the paid receipt promises (index.ts): pickup 10-15 min, delivery 30-45 min
-  afterPay: (delivery: boolean) => delivery ? `It'll be on its way about 30-45 minutes after you pay.` : `We'll have it ready about 10-15 minutes after you pay. We look forward to seeing you.`,
+  afterPay: (delivery: boolean) => delivery ? `On its way about 30-45 min after you pay.` : `Ready about 10-15 min after you pay.`,
 
   lineUnresolved: (span: string, c: number) => [
     `Hmm, I couldn't find "${span}" on our menu. What is it, or what would you like instead?`,
