@@ -561,3 +561,13 @@ above 80% (all-in cost under ~20¢). Next levers are the turn count (tip on the 
 Telnyx outbound rate itself ($0.0085 on this account vs Telnyx's published 10DLC rates). Stripe fees are the shop's once
 onboarded through Connect; test orders move no money.
 
+**2026-09-26, $1.49 and the Why OrderFare page.** Jason set the per-order fee to $1.49 (chat-sms v664; `_shared/connect.ts`),
+modeled against Telnyx actuals (~2¢ per round-trip at the published rate) and the apps' 10–15% service fees and 15–25%
+menu uplift; $1.49 holds >80% margin through ~15 turns. The cost-comparison page was briefed to the crew through the
+courier (`~/claude/orderfare/crew/10-cost-comparison-page.msg`); the orchestrator stalled once ("working on it", nothing for
+an hour), delivered after a sharp follow-up: `why-orderfare.html` on branch `site/why-orderfare`, nav + footer links, the
+public-site allowlist, the stale $0.99 lines on how-it-works and the checkout page fixed, screenshots in
+`docs/_proof/site/`. PO reviewed the preview against the brief (numbers exact, design matched, mobile clean), opened the
+merge window and fast-forwarded main (686e7011); Netlify publishes from main. Crew machine: the file courier is loaded
+again (idle-cost zero); the gateway's 60-minute heartbeat poll is a small recurring model call Jason has not yet ruled on.
+
