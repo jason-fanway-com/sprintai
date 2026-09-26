@@ -152,8 +152,8 @@ export function turn(input: TurnInput): TurnOutput {
     const sizes = m0.kind === "change_line" && !m0.add_option_spans?.some((o) => words(o).some((w) => SIZE_WORDS.has(w))) && m0.remove_option_spans?.some((o) => words(o).some((w) => SIZE_WORDS.has(w))) ? [...new Set(mw.filter((w) => SIZE_WORDS.has(w) && !m0.remove_option_spans!.some((o) => words(o).includes(w))))] : [];
     const m: Move = m0.kind === "add_line" ? upgradeSpan(m0) : m0.kind === "change_line" && sizes.length === 1 ? { ...m0, add_option_spans: [...(m0.add_option_spans ?? []), sizes[0]] } : m0;
     if (m.kind === "change_line" && !m.add_option_spans?.length && !m.remove_option_spans?.length && (m.qty === null || m.qty === undefined) && "span" in m.ref) { // "swap the cheesesteak for a chicken cheesesteak sandwich": an empty change on a line, and the message names another item
-      const ref = m.ref, tgt = form0.lines.find((l) => l.item_id && lineMatchesSpan(l, ref.span, menu)), refAt = findWordRun(mw, words(ref.span)), other = tgt ? hits.find((h) => h.item_ids.length === 1 && h.item_ids[0] !== tgt.item_id && (refAt < 0 || h.start >= refAt + words(ref.span).length || h.end <= refAt)) : undefined;
-      if (tgt && other) { moves.push({ kind: "remove_line", ref: { line_id: tgt.line_id } }, { kind: "add_line", item_span: mw.slice(other.start, other.end).join(" "), qty: tgt.qty, option_spans: [] }); ledger.push({ turn: t, event: "swap_line", data: { from: tgt.line_id, to: mw.slice(other.start, other.end).join(" ") } }); continue; }
+      const ref = m.ref, tgt = form0.lines.find((l) => l.item_id && lineMatchesSpan(l, ref.span, menu)), refAt = findWordRun(mw, words(ref.span)), other = tgt ? hits.filter((h) => h.item_ids.length === 1 && h.item_ids[0] !== tgt.item_id && (refAt < 0 || h.start >= refAt + words(ref.span).length || h.end <= refAt)).sort((a, b) => (b.end - b.start) - (a.end - a.start))[0] : undefined; // the longest other mention is the replacement
+      if (tgt && other) { moves.push({ kind: "add_line", item_span: mw.slice(other.start, other.end).join(" "), qty: tgt.qty, option_spans: [] }, { kind: "remove_line", ref: { line_id: tgt.line_id } }); ledger.push({ turn: t, event: "swap_line", data: { from: tgt.line_id, to: mw.slice(other.start, other.end).join(" ") } }); continue; } // add first: an emptied cart would reopen the item list
     }
     if (m.kind === "remove_line") { // "take one off" a line of three lowers it to two; the whole line goes only when nothing counts fewer
       const ref = m.ref, tgt = "line_id" in ref ? form0.lines.find((l) => l.line_id === ref.line_id) : "span" in ref ? form0.lines.find((l) => lineMatchesSpan(l, ref.span, menu)) : undefined, n = mw.map((w) => leadingCount(`${w} x`).count).find((c) => c !== null && c > 0);
@@ -306,7 +306,7 @@ export function turn(input: TurnInput): TurnOutput {
     const same = input.form.open && "line_id" in input.form.open && input.form.open.line_id === q.line_id;
     if (l) l.asks = same ? (l.asks ?? 0) + 1 : (l.asks ?? 0);
   }
-  if (q?.kind === "items" && form.items_done && form.lines.every((l) => l.status.kind !== "complete")) { form.items_done = false; form.confirmed = false; form.status = "open"; }
+  if (q?.kind === "items" && form.items_done && !form.relink && form.lines.every((l) => l.status.kind !== "complete")) { form.items_done = false; form.confirmed = false; form.status = "open"; } // a swap after the link leaves one pending line: the order is still "done", and relinks once that line is whole
   if (q?.kind === "confirm") form.status = "confirming";
   const handoff = q === null && form.confirmed && form.status === "awaiting_payment";
 

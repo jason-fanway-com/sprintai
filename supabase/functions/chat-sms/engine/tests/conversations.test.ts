@@ -1477,5 +1477,14 @@ Deno.test("end-of-order edits: a tip change after the link remakes the link; 'sw
   q = say(q.form, "swap the cheesesteak for garlic knots", [{ kind: "change_line", ref: { span: "cheesesteak" }, qty: null, add_option_spans: [], remove_option_spans: [] }]);
   assertEquals(q.form.lines.map((l) => l.item_id), [IDS.knots], q.reply);
   assert(q.ledger.some((e) => e.event === "swap_line"));
+  // the same swap after the link, into an item that needs a question: asked, answered, then relinked
+  let r = say(p, "a cheesesteak", [{ kind: "add_line", item_span: "cheesesteak", qty: 1, option_spans: [] }]);
+  r = say(r.form, "thats it"); r = say(r.form, "yes");
+  r = say(r.form, "swap the cheesesteak for a house salad", [{ kind: "change_line", ref: { span: "cheesesteak" }, qty: null, add_option_spans: [], remove_option_spans: [] }]);
+  assertStringIncludes(r.reply, "dressing");
+  r = say(r.form, "ranch");
+  assertEquals(r.form.lines.map((l) => l.item_id), [IDS.houseSalad], r.reply);
+  assertEquals(r.form.status, "awaiting_payment", r.reply);
+  assertStringIncludes(r.reply, "earlier link won't work");
 });
 
