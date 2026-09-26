@@ -237,7 +237,7 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: LineMatc
         break;
       }
       case "add_line": {
-        const wasPlainOpen = form.status === "open";
+        const wasPlainOpen = form.status === "open" && !form.relink; // an order reopened by a change after the link is still "done"
         reopenIfConfirmed();
         const line = newLine(form, m.item_span, Math.floor(m.qty || 1), [...(m.option_spans ?? [])], { notes: m.note ? [m.note] : [] });
         form.lines.push(line);
