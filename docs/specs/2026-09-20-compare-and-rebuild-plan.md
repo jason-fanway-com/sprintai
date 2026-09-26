@@ -535,3 +535,14 @@ ORDERFARE + the shop. Found while checking: the Stripe account's own public name
 "hygienichappiness.com" (Jason's other business) — dashboard settings, his to change. 145 tests. Design notes:
 `2026-09-25-ask-dont-guess.md`.
 
+**2026-09-26, end-of-order edits and the economics (v660–v662).** Jason asked for twenty scripted end-of-order edits
+(`scripts/engine/endgame.py`: removes, adds after the link, add-remove-add, repeated adds, quantity and tip changes, swaps,
+cancel). First run 18/20; the two real defects were money: a tip change after the link kept the old link (any tip or
+pickup/delivery change now remakes the link), and "swap X for Y" did nothing when the model sent only an empty edit (the
+longest other mention is the replacement; the order stays "done" through the swap so it relinks once the new line is
+whole). Full rerun 20/20. Measured economics per order: interpreter ~1.0¢ (1,900 tokens in per call, ~4 calls; no prompt
+caching today), voice ~0.3¢, SMS ~20¢ (Twilio $0.0083 per segment both ways), Stripe 30¢ + 2.9%. The model is a fifteenth
+of the SMS bill; the levers are caching (−60% interpreter input), a cheaper interpreter model (326-case eval harness at
+`tests/eval/run-eval.ts`; nano/flash-lite class is 10× cheaper than Haiku), voice on the cheapest model (the engine verifies
+it), and SMS segment trimming (3–5¢ per order). Awaiting Jason's go on the $1.60 bake-off.
+
