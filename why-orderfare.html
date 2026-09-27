@@ -112,28 +112,43 @@ nav {
   font-size: 13px; font-family: var(--font-b); color: var(--ink); font-variant-numeric: tabular-nums;
 }
 .picker-exact input:focus { outline: none; border-color: var(--brand); }
-.compare-right { padding: 22px 24px 20px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-content: start; }
-.compare-right .step { grid-column: 1 / -1; }
-.price-card { border: 1px solid var(--border); border-radius: var(--r); padding: 16px 16px 14px; min-width: 0; display: flex; flex-direction: column; background: #fff; }
-.price-card.ours { background: var(--green-light); border-color: var(--green-border); }
-.price-brand { font-size: 13px; font-weight: 700; color: var(--navy); display: flex; align-items: center; gap: 7px; }
-.price-brand .dot { width: 10px; height: 10px; border-radius: 3px; background: var(--light); flex: none; }
-.price-card.ours .dot { background: var(--green); }
-.price-card.dd .dot { background: #FF3008; }
-.price-card.ue .dot { background: #142328; }
-.price-total { font-family: var(--font-d); font-weight: 800; font-size: clamp(19px, 1.9vw, 25px); color: var(--navy); line-height: 1.05; margin: 10px 0 2px; font-variant-numeric: tabular-nums; white-space: nowrap; letter-spacing: -0.3px; }
-.price-card.ours .price-total { color: var(--green); }
-.price-total-lbl { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
-.price-lines { border-top: 1px dashed var(--border-warm); padding-top: 9px; display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--ink); }
-.price-card.ours .price-lines { border-top-color: var(--green-border); }
-.price-line { display: flex; justify-content: space-between; gap: 8px; }
-.price-line .val { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--navy); font-weight: 600; }
-.price-line.up .val { color: var(--brand); }
-.price-line.zero .val { color: var(--green); }
-.price-line small { display: block; color: var(--muted); font-weight: 400; font-size: 11.5px; line-height: 1.3; }
-.price-more { margin-top: auto; padding-top: 12px; font-size: 13px; font-weight: 700; color: var(--brand); font-variant-numeric: tabular-nums; line-height: 1.4; }
-.price-card.ours .price-more { color: var(--green); }
-.compare-foot { grid-column: 1 / -1; font-size: 12px; color: var(--light); line-height: 1.55; margin-top: 2px; }
+.compare-right { padding: 22px 26px 18px; display: flex; flex-direction: column; min-width: 0; }
+.chart { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; margin-top: 14px; }
+.pcol { min-width: 0; display: flex; flex-direction: column; align-items: center; text-align: center; }
+.pcol-total { font-family: var(--font-d); font-weight: 800; font-size: clamp(18px, 1.8vw, 24px); color: var(--navy); line-height: 1.05; font-variant-numeric: tabular-nums; white-space: nowrap; letter-spacing: -0.3px; }
+.pcol.ours .pcol-total { color: var(--green); }
+.pcol-total-lbl { font-size: 11px; color: var(--muted); margin: 3px 0 8px; }
+.stack-area { height: 274px; width: 100%; display: flex; align-items: flex-end; justify-content: center; position: relative; }
+.stack { width: 68%; max-width: 120px; display: flex; flex-direction: column-reverse; border-radius: 8px 8px 0 0; overflow: hidden; }
+.seg { width: 100%; transition: height .4s ease-out; position: relative; }
+.seg.food { background: #DCE4EC; height: 76px; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 12px; font-weight: 500; color: var(--ink); line-height: 1.25; padding: 4px; }
+.seg.food b { font-variant-numeric: tabular-nums; font-weight: 700; display: block; }
+.seg.up { background: var(--brand); }
+.seg.fee { background: var(--navy); }
+.pcol.ours .seg.fee { background: var(--green); }
+.seg.cap { background: repeating-linear-gradient(135deg, rgba(232,82,26,.55) 0 5px, rgba(232,82,26,.15) 5px 10px); }
+.baseline { border-top: 2px solid var(--border); margin-top: 0; padding-top: 10px; width: 100%; }
+.pcol-name { font-size: 14px; font-weight: 700; color: var(--navy); display: flex; align-items: center; justify-content: center; gap: 7px; }
+.pcol-name .dot { width: 10px; height: 10px; border-radius: 3px; background: var(--light); flex: none; }
+.pcol.ours .dot { background: var(--green); }
+.pcol.dd .dot { background: #FF3008; }
+.pcol.ue .dot { background: #142328; }
+.pcol-lines { margin-top: 8px; width: 100%; display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.pcol-line { display: flex; justify-content: space-between; gap: 6px; text-align: left; }
+.pcol-line .val { font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 600; color: var(--navy); }
+.pcol-line.up .val { color: var(--brand); }
+.pcol-line.fee .val { color: var(--navy); }
+.pcol.ours .pcol-line.fee .val, .pcol-line.zero .val { color: var(--green); }
+.pcol-more { margin-top: 10px; font-size: 13px; font-weight: 700; color: var(--brand); font-variant-numeric: tabular-nums; line-height: 1.35; }
+.pcol.ours .pcol-more { color: var(--green); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 16px; font-size: 12px; color: var(--muted); align-items: center; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.legend i.food { background: #DCE4EC; }
+.legend i.up { background: var(--brand); }
+.legend i.fee { background: var(--navy); }
+.legend i.cap { background: repeating-linear-gradient(135deg, rgba(232,82,26,.55) 0 3px, rgba(232,82,26,.15) 3px 6px); }
+.compare-foot { font-size: 12px; color: var(--light); line-height: 1.55; margin-top: 12px; }
 
 /* ── COMPARE BAR: compact sticky follower once the card scrolls away ── */
 .compare-bar-wrap { position: sticky; top: 66px; height: 0; z-index: 150; }
@@ -160,8 +175,15 @@ nav {
   .compare-bar-prices { margin-left: 0; width: 100%; gap: 12px; font-size: 12px; }
 }
 @media (max-width: 640px) {
-  .compare-right { grid-template-columns: 1fr; padding: 18px 16px 16px; }
-  .price-total { font-size: 26px; }
+  .compare-right { padding: 18px 14px 14px; }
+  .chart { gap: 8px; }
+  .pcol-total { font-size: 13.5px; white-space: normal; line-height: 1.15; min-height: 2.3em; display: flex; align-items: flex-end; justify-content: center; }
+  .stack-area { height: 205px; }
+  .stack { width: 78%; }
+  .seg.food { height: 60px; font-size: 11px; }
+  .pcol-lines { font-size: 11px; }
+  .pcol-line { flex-direction: column; gap: 0; text-align: center; }
+  .pcol-more { font-size: 12px; }
   .compare-wrap { padding: 0 16px 28px; }
   .compare-bar .picker-slider { width: 110px; }
   .wf-hero { padding: 40px 20px 24px; }
@@ -358,38 +380,62 @@ footer { background: #0F1923; padding: 60px 48px 32px; }
       </div>
       <div class="compare-right">
         <div class="step"><i>2</i> What you pay for it</div>
-        <div class="price-card ours">
-          <div class="price-brand"><span class="dot"></span>OrderFare</div>
-          <div class="price-total" id="pc-of-total">$31.49</div>
-          <div class="price-total-lbl">total before tip</div>
-          <div class="price-lines">
-            <div class="price-line"><span>Menu</span><span class="val" id="pc-of-menu">$30.00</span></div>
-            <div class="price-line zero"><span>Hidden markup</span><span class="val">$0</span></div>
-            <div class="price-line"><span>Service fee <small>flat</small></span><span class="val">$1.49</span></div>
+        <div class="chart" aria-live="polite">
+          <div class="pcol ours">
+            <div class="pcol-total" id="pc-of-total">$31.49</div>
+            <div class="pcol-total-lbl">total before tip</div>
+            <div class="stack-area"><div class="stack">
+              <div class="seg food"><span><b id="pc-of-menu">$30.00</b>food</span></div>
+              <div class="seg fee" id="sg-of-fee" title="Service fee $1.49"></div>
+            </div></div>
+            <div class="baseline"></div>
+            <div class="pcol-name"><span class="dot"></span>OrderFare</div>
+            <div class="pcol-lines">
+              <div class="pcol-line zero"><span>Hidden markup</span><span class="val">$0</span></div>
+              <div class="pcol-line fee"><span>Service fee, flat</span><span class="val">$1.49</span></div>
+            </div>
+            <div class="pcol-more">Counter prices. One flat fee.</div>
           </div>
-          <div class="price-more">Counter prices. One flat fee.</div>
+          <div class="pcol dd">
+            <div class="pcol-total" id="pc-dd-total">$37.50-42.00</div>
+            <div class="pcol-total-lbl">total before tip</div>
+            <div class="stack-area"><div class="stack">
+              <div class="seg food"><span><b id="pc-dd-menu">$30.00</b>food</span></div>
+              <div class="seg up" id="sg-dd-up"></div>
+              <div class="seg fee" id="sg-dd-fee"></div>
+              <div class="seg cap" id="sg-dd-cap"></div>
+            </div></div>
+            <div class="baseline"></div>
+            <div class="pcol-name"><span class="dot"></span>DoorDash</div>
+            <div class="pcol-lines">
+              <div class="pcol-line up"><span>Hidden markup 15-25%</span><span class="val" id="pc-dd-up">+$4.50-7.50</span></div>
+              <div class="pcol-line fee"><span>Service fee 10-15%</span><span class="val" id="pc-dd-fee">+$3.00-4.50</span></div>
+            </div>
+            <div class="pcol-more"><span id="pc-dd-more">$6.01-10.51</span> more than OrderFare</div>
+          </div>
+          <div class="pcol ue">
+            <div class="pcol-total" id="pc-ue-total">$39.00-42.00</div>
+            <div class="pcol-total-lbl">total before tip</div>
+            <div class="stack-area"><div class="stack">
+              <div class="seg food"><span><b id="pc-ue-menu">$30.00</b>food</span></div>
+              <div class="seg up" id="sg-ue-up"></div>
+              <div class="seg fee" id="sg-ue-fee"></div>
+              <div class="seg cap" id="sg-ue-cap"></div>
+            </div></div>
+            <div class="baseline"></div>
+            <div class="pcol-name"><span class="dot"></span>Uber Eats</div>
+            <div class="pcol-lines">
+              <div class="pcol-line up"><span>Hidden markup 15-25%</span><span class="val" id="pc-ue-up">+$4.50-7.50</span></div>
+              <div class="pcol-line fee"><span>Service fee about 15%</span><span class="val" id="pc-ue-fee">+$4.50</span></div>
+            </div>
+            <div class="pcol-more"><span id="pc-ue-more">$7.51-10.51</span> more than OrderFare</div>
+          </div>
         </div>
-        <div class="price-card dd">
-          <div class="price-brand"><span class="dot"></span>DoorDash</div>
-          <div class="price-total" id="pc-dd-total">$37.50-42.00</div>
-          <div class="price-total-lbl">total before tip</div>
-          <div class="price-lines">
-            <div class="price-line"><span>Menu</span><span class="val" id="pc-dd-menu">$30.00</span></div>
-            <div class="price-line up"><span>Hidden markup <small>15-25%</small></span><span class="val" id="pc-dd-up">+$4.50-7.50</span></div>
-            <div class="price-line up"><span>Service fee <small>10-15%</small></span><span class="val" id="pc-dd-fee">+$3.00-4.50</span></div>
-          </div>
-          <div class="price-more"><span id="pc-dd-more">$6.01-10.51</span> more than OrderFare</div>
-        </div>
-        <div class="price-card ue">
-          <div class="price-brand"><span class="dot"></span>Uber Eats</div>
-          <div class="price-total" id="pc-ue-total">$39.00-42.00</div>
-          <div class="price-total-lbl">total before tip</div>
-          <div class="price-lines">
-            <div class="price-line"><span>Menu</span><span class="val" id="pc-ue-menu">$30.00</span></div>
-            <div class="price-line up"><span>Hidden markup <small>15-25%</small></span><span class="val" id="pc-ue-up">+$4.50-7.50</span></div>
-            <div class="price-line up"><span>Service fee <small>about 15%</small></span><span class="val" id="pc-ue-fee">+$4.50</span></div>
-          </div>
-          <div class="price-more"><span id="pc-ue-more">$7.51-10.51</span> more than OrderFare</div>
+        <div class="legend">
+          <span><i class="food"></i>Food at the counter price</span>
+          <span><i class="up"></i>Hidden menu markup</span>
+          <span><i class="fee"></i>Service fee</span>
+          <span><i class="cap"></i>Up to, at the top of the range</span>
         </div>
         <div class="compare-foot">Delivery fees and tips are left out on all three: they depend on distance and go to the restaurant or the driver. The markup and fee ranges come from published rates, listed under Sources at the bottom of this page. Restaurants raise app menu prices to cover the 15-30% commission the apps charge them.</div>
       </div>
@@ -715,6 +761,14 @@ footer { background: #0F1923; padding: 60px 48px 32px; }
     tween(document.getElementById('bar-dd'), [ddLo, ddHi], function (v) { return fmtRange(v[0], v[1]); }, 400);
     tween(document.getElementById('bar-ue'), [ueLo, ueHi], function (v) { return fmtRange(v[0], v[1]); }, 400);
     if (barSlider) barSlider.value = S;
+    // Stack heights: the food block is a fixed base; add-ons scale so the tallest pile (0.40 x S) is ADD_PX tall.
+    // Fixed dollar scale, so the piles visibly grow as the order grows: the tallest pile (0.40 x $100 = $40) fills ADD_PX.
+    var ADD_PX = (window.innerWidth <= 640) ? 140 : 190;
+    var px = ADD_PX / 40;
+    function setH(id, dollars) { var el = document.getElementById(id); if (el) el.style.height = (dollars > 0 ? Math.max(3, dollars * px) : 0) + 'px'; }
+    setH('sg-of-fee', 1.49);
+    setH('sg-dd-up', upliftLo); setH('sg-dd-fee', appsFeeLo); setH('sg-dd-cap', (upliftHi - upliftLo) + (appsFeeHi - appsFeeLo));
+    setH('sg-ue-up', upliftLo); setH('sg-ue-fee', ueFee);     setH('sg-ue-cap', (upliftHi - upliftLo));
 
     // ── section a: fee bars ──
     tween(document.getElementById('bar-apps-num'), [appsFeeLo, appsFeeHi], function (v) { return fmtRange(v[0], v[1]); }, 400);
