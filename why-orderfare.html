@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Why OrderFare: One flat $1.49. Real menu prices.</title>
-<meta name="description" content="No percentage service fee. No marked-up menu. See exactly what a DoorDash or Uber Eats order really costs versus OrderFare's flat $1.49.">
+<title>Order price comparison: OrderFare vs DoorDash vs Uber Eats</title>
+<meta name="description" content="Set an order price and see what the same food costs on OrderFare, DoorDash and Uber Eats. OrderFare adds one flat $1.49 to counter menu prices; the apps add a percentage service fee and a hidden menu markup.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,700;0,9..144,800;1,9..144,400;1,9..144,700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap" rel="stylesheet">
 <style>
@@ -68,12 +68,106 @@ nav {
 .section-sub { font-size: 18px; color: var(--muted); line-height: 1.7; max-width: 680px; }
 
 /* ── HERO ── */
-.wf-hero { max-width: 800px; margin: 0 auto; padding: 90px 48px 56px; text-align: center; }
+.wf-hero { max-width: 880px; margin: 0 auto; padding: 64px 48px 32px; text-align: center; }
 .wf-hero h1 {
-  font-family: var(--font-d); font-size: 52px; font-weight: 800;
-  line-height: 1.08; color: var(--navy); margin-bottom: 22px; letter-spacing: -1.2px;
+  font-family: var(--font-d); font-size: 44px; font-weight: 800;
+  line-height: 1.1; color: var(--navy); margin-bottom: 18px; letter-spacing: -1px;
 }
-.wf-hero-sub { font-size: 18px; color: var(--muted); line-height: 1.72; max-width: 620px; margin: 0 auto; }
+.wf-hero-sub { font-size: 18px; color: var(--muted); line-height: 1.7; max-width: 660px; margin: 0 auto; }
+.wf-hero-sub b { color: var(--navy); font-weight: 600; }
+
+/* ── COMPARE: order price on the left, three totals on the right ── */
+.compare-wrap { padding: 0 48px 40px; max-width: 1140px; margin: 0 auto; }
+.compare {
+  display: grid; grid-template-columns: 264px 1fr;
+  background: #fff; border: 1px solid var(--border); border-radius: var(--r-lg);
+  box-shadow: 0 8px 30px rgba(23,33,46,.07); overflow: hidden;
+}
+.compare-left {
+  background: var(--warm); border-right: 1px solid var(--border-warm);
+  padding: 26px 24px; display: flex; flex-direction: column; justify-content: center;
+}
+.step { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; color: var(--brand); text-transform: uppercase; letter-spacing: 1px; }
+.step i { font-style: normal; width: 20px; height: 20px; border-radius: 50%; background: var(--brand); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; flex: none; }
+.compare-left .step { margin-bottom: 10px; }
+.compare-left h2 { font-family: var(--font-b); font-size: 15px; font-weight: 600; color: var(--navy); line-height: 1.45; margin-bottom: 14px; }
+.compare-left h2 small { display: block; font-weight: 400; color: var(--muted); font-size: 13px; margin-top: 2px; }
+.picker-amount { font-family: var(--font-d); font-weight: 800; color: var(--navy); font-size: 46px; line-height: 1; font-variant-numeric: tabular-nums; margin-bottom: 14px; }
+.picker-slider { display: block; width: 100%; -webkit-appearance: none; appearance: none; height: 5px; border-radius: 4px; background: var(--brand-mid); outline: none; }
+.picker-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%; background: var(--brand); border: 3px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.25); cursor: pointer; }
+.picker-slider::-moz-range-thumb { width: 20px; height: 20px; border-radius: 50%; background: var(--brand); border: 3px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.25); cursor: pointer; }
+.picker-slider:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+.picker-row { display: flex; align-items: center; gap: 6px; margin-top: 14px; flex-wrap: wrap; }
+.chip {
+  border: 1.5px solid var(--border); background: #fff; color: var(--navy);
+  padding: 5px 11px; border-radius: 999px; font-size: 13px; font-weight: 600;
+  cursor: pointer; font-family: var(--font-b); transition: all .15s;
+}
+.chip:hover { border-color: var(--brand); }
+.chip.active { background: var(--brand); border-color: var(--brand); color: #fff; }
+.picker-exact { display: flex; align-items: center; gap: 5px; margin-top: 12px; font-size: 13px; color: var(--muted); }
+.picker-exact span { color: var(--muted); font-weight: 600; font-size: 13px; }
+.picker-exact input {
+  width: 58px; padding: 5px 7px; border-radius: 8px; border: 1.5px solid var(--border);
+  font-size: 13px; font-family: var(--font-b); color: var(--ink); font-variant-numeric: tabular-nums;
+}
+.picker-exact input:focus { outline: none; border-color: var(--brand); }
+.compare-right { padding: 22px 24px 20px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-content: start; }
+.compare-right .step { grid-column: 1 / -1; }
+.price-card { border: 1px solid var(--border); border-radius: var(--r); padding: 16px 16px 14px; min-width: 0; display: flex; flex-direction: column; background: #fff; }
+.price-card.ours { background: var(--green-light); border-color: var(--green-border); }
+.price-brand { font-size: 13px; font-weight: 700; color: var(--navy); display: flex; align-items: center; gap: 7px; }
+.price-brand .dot { width: 10px; height: 10px; border-radius: 3px; background: var(--light); flex: none; }
+.price-card.ours .dot { background: var(--green); }
+.price-card.dd .dot { background: #FF3008; }
+.price-card.ue .dot { background: #142328; }
+.price-total { font-family: var(--font-d); font-weight: 800; font-size: clamp(19px, 1.9vw, 25px); color: var(--navy); line-height: 1.05; margin: 10px 0 2px; font-variant-numeric: tabular-nums; white-space: nowrap; letter-spacing: -0.3px; }
+.price-card.ours .price-total { color: var(--green); }
+.price-total-lbl { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+.price-lines { border-top: 1px dashed var(--border-warm); padding-top: 9px; display: flex; flex-direction: column; gap: 5px; font-size: 13px; color: var(--ink); }
+.price-card.ours .price-lines { border-top-color: var(--green-border); }
+.price-line { display: flex; justify-content: space-between; gap: 8px; }
+.price-line .val { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--navy); font-weight: 600; }
+.price-line.up .val { color: var(--brand); }
+.price-line.zero .val { color: var(--green); }
+.price-line small { display: block; color: var(--muted); font-weight: 400; font-size: 11.5px; line-height: 1.3; }
+.price-more { margin-top: auto; padding-top: 12px; font-size: 13px; font-weight: 700; color: var(--brand); font-variant-numeric: tabular-nums; line-height: 1.4; }
+.price-card.ours .price-more { color: var(--green); }
+.compare-foot { grid-column: 1 / -1; font-size: 12px; color: var(--light); line-height: 1.55; margin-top: 2px; }
+
+/* ── COMPARE BAR: compact sticky follower once the card scrolls away ── */
+.compare-bar-wrap { position: sticky; top: 66px; height: 0; z-index: 150; }
+.compare-bar {
+  position: absolute; left: 0; right: 0; top: 0;
+  background: rgba(255,255,255,.97); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border); box-shadow: 0 6px 20px rgba(23,33,46,.10);
+  transform: translateY(-110%); opacity: 0; pointer-events: none;
+  transition: transform .25s ease, opacity .25s ease;
+}
+.compare-bar.on { transform: none; opacity: 1; pointer-events: auto; }
+.compare-bar-in { max-width: 1140px; margin: 0 auto; padding: 9px 48px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.compare-bar-lbl { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; }
+.compare-bar-amt { font-family: var(--font-d); font-weight: 800; font-size: 22px; color: var(--navy); min-width: 3.2ch; font-variant-numeric: tabular-nums; line-height: 1; }
+.compare-bar .picker-slider { width: 150px; }
+.compare-bar-prices { display: flex; gap: 16px; margin-left: auto; font-size: 13px; color: var(--muted); flex-wrap: wrap; }
+.compare-bar-prices b { color: var(--navy); font-variant-numeric: tabular-nums; font-weight: 700; }
+.compare-bar-prices b.good { color: var(--green); }
+@media (max-width: 900px) {
+  .compare { grid-template-columns: 1fr; }
+  .compare-left { border-right: none; border-bottom: 1px solid var(--border-warm); padding: 22px 20px; }
+  .compare-wrap { padding: 0 24px 32px; }
+  .compare-bar-in { padding: 8px 24px; gap: 10px; }
+  .compare-bar-prices { margin-left: 0; width: 100%; gap: 12px; font-size: 12px; }
+}
+@media (max-width: 640px) {
+  .compare-right { grid-template-columns: 1fr; padding: 18px 16px 16px; }
+  .price-total { font-size: 26px; }
+  .compare-wrap { padding: 0 16px 28px; }
+  .compare-bar .picker-slider { width: 110px; }
+  .wf-hero { padding: 40px 20px 24px; }
+  .wf-hero h1 { font-size: 30px; letter-spacing: -0.6px; }
+  .wf-hero-sub { font-size: 16px; }
+}
 
 /* ── COMPARISON TABLE ── */
 .cmp-table-wrap { margin-top: 40px; overflow-x: auto; }
@@ -116,50 +210,6 @@ nav {
 .keeps-box p { font-size: 16px; color: var(--ink); line-height: 1.75; }
 .keeps-box a { color: var(--brand); font-weight: 600; text-decoration: none; }
 .keeps-box a:hover { text-decoration: underline; }
-
-/* ── ORDER PICKER (single shared control) ── */
-.picker-wrap { padding: 40px 48px 0; max-width: 1140px; margin: 0 auto; }
-.picker-sentinel { height: 1px; }
-.order-picker {
-  position: sticky; top: 66px; z-index: 150;
-  background: #fff; border: 1px solid var(--border); border-radius: var(--r-lg);
-  padding: 32px 36px; box-shadow: 0 1px 3px rgba(23,33,46,.05);
-  transition: padding .25s ease, box-shadow .25s ease;
-}
-.order-picker.is-compact { padding: 12px 20px; box-shadow: 0 6px 20px rgba(23,33,46,.12); }
-.picker-top { display: flex; align-items: baseline; justify-content: center; gap: 10px; margin-bottom: 18px; }
-.order-picker.is-compact .picker-top { margin-bottom: 10px; }
-.picker-label { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
-.picker-amount { font-family: var(--font-d); font-weight: 800; color: var(--navy); font-size: 48px; font-variant-numeric: tabular-nums; min-width: 3.5ch; text-align: center; transition: font-size .25s ease; }
-.order-picker.is-compact .picker-amount { font-size: 26px; }
-.picker-slider-row { display: flex; align-items: center; gap: 16px; max-width: 560px; margin: 0 auto; flex-wrap: wrap; justify-content: center; }
-.picker-slider { flex: 1; min-width: 160px; -webkit-appearance: none; appearance: none; height: 6px; border-radius: 4px; background: var(--brand-mid); outline: none; }
-.picker-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 24px; height: 24px; border-radius: 50%; background: var(--brand); border: 3px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.25); cursor: pointer; }
-.picker-slider::-moz-range-thumb { width: 24px; height: 24px; border-radius: 50%; background: var(--brand); border: 3px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.25); cursor: pointer; }
-.picker-slider:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
-.picker-exact { display: flex; align-items: center; gap: 6px; }
-.picker-exact span { color: var(--muted); font-weight: 600; }
-.picker-exact input {
-  width: 76px; padding: 8px 10px; border-radius: 8px; border: 1.5px solid var(--border);
-  font-size: 15px; font-family: var(--font-b); color: var(--ink); font-variant-numeric: tabular-nums;
-}
-.picker-exact input:focus { outline: none; border-color: var(--brand); }
-.picker-chips { display: flex; gap: 10px; justify-content: center; margin-top: 18px; }
-.order-picker.is-compact .picker-chips { display: none; }
-.chip {
-  border: 1.5px solid var(--border); background: #fff; color: var(--navy);
-  padding: 7px 18px; border-radius: 999px; font-size: 14px; font-weight: 600;
-  cursor: pointer; font-family: var(--font-b); transition: all .15s;
-}
-.chip:hover { border-color: var(--brand); }
-.chip.active { background: var(--brand); border-color: var(--brand); color: #fff; }
-
-@media (max-width: 480px) {
-  .picker-wrap { padding: 28px 20px 0; }
-  .order-picker { padding: 20px 16px; }
-  .order-picker.is-compact { padding: 10px 14px; }
-  .picker-amount { font-size: 34px; }
-}
 
 /* ── GRAPHIC: fee bars (section a) ── */
 .fee-bars { margin-top: 36px; }
@@ -282,37 +332,83 @@ footer { background: #0F1923; padding: 60px 48px 32px; }
   </div>
 </nav>
 
-<!-- HERO -->
+<!-- HERO + COMPARE (order price on the left, three totals on the right) -->
 <section style="background: linear-gradient(180deg, #FFF8F3 0%, var(--cream) 100%);">
   <div class="wf-hero">
-    <div class="eyebrow" style="text-align:center;">Why OrderFare</div>
-    <h1>One flat $1.49. Real menu prices. That's it.</h1>
-    <p class="wf-hero-sub">No percentage service fee. No marked-up menu. Text your order to the restaurant and pay what the counter charges, plus $1.49.</p>
+    <div class="eyebrow" style="text-align:center;">Order price comparison</div>
+    <h1>What does the same order cost on OrderFare, DoorDash and Uber Eats?</h1>
+    <p class="wf-hero-sub">Compare OrderFare with DoorDash and Uber Eats. <b>Set the order price on the left</b>, and the three totals on the right move with it: the same food, priced the way each service prices it.</p>
+  </div>
+  <div class="compare-wrap">
+    <div class="compare" id="compare">
+      <div class="compare-left">
+        <div class="step"><i>1</i> Order price</div>
+        <h2>What the food costs at the counter <small>Pizza, subs, wings: whatever you'd order.</small></h2>
+        <div class="picker-amount" id="picker-amount" aria-hidden="true">$30</div>
+        <input type="range" class="picker-slider" id="picker-slider" min="10" max="100" step="1" value="30"
+               aria-label="Order price in dollars" aria-valuetext="$30 order">
+        <div class="picker-row">
+          <button type="button" class="chip" data-amt="15">$15</button>
+          <button type="button" class="chip" data-amt="30">$30</button>
+          <button type="button" class="chip" data-amt="60">$60</button>
+        </div>
+        <label class="picker-exact" for="picker-exact-input">or type it:
+          <span>$</span><input type="number" id="picker-exact-input" min="10" max="100" step="1" value="30" inputmode="decimal" aria-label="Enter an exact order price">
+        </label>
+      </div>
+      <div class="compare-right">
+        <div class="step"><i>2</i> What you pay for it</div>
+        <div class="price-card ours">
+          <div class="price-brand"><span class="dot"></span>OrderFare</div>
+          <div class="price-total" id="pc-of-total">$31.49</div>
+          <div class="price-total-lbl">total before tip</div>
+          <div class="price-lines">
+            <div class="price-line"><span>Menu</span><span class="val" id="pc-of-menu">$30.00</span></div>
+            <div class="price-line zero"><span>Hidden markup</span><span class="val">$0</span></div>
+            <div class="price-line"><span>Service fee <small>flat</small></span><span class="val">$1.49</span></div>
+          </div>
+          <div class="price-more">Counter prices. One flat fee.</div>
+        </div>
+        <div class="price-card dd">
+          <div class="price-brand"><span class="dot"></span>DoorDash</div>
+          <div class="price-total" id="pc-dd-total">$37.50-42.00</div>
+          <div class="price-total-lbl">total before tip</div>
+          <div class="price-lines">
+            <div class="price-line"><span>Menu</span><span class="val" id="pc-dd-menu">$30.00</span></div>
+            <div class="price-line up"><span>Hidden markup <small>15-25%</small></span><span class="val" id="pc-dd-up">+$4.50-7.50</span></div>
+            <div class="price-line up"><span>Service fee <small>10-15%</small></span><span class="val" id="pc-dd-fee">+$3.00-4.50</span></div>
+          </div>
+          <div class="price-more"><span id="pc-dd-more">$6.01-10.51</span> more than OrderFare</div>
+        </div>
+        <div class="price-card ue">
+          <div class="price-brand"><span class="dot"></span>Uber Eats</div>
+          <div class="price-total" id="pc-ue-total">$39.00-42.00</div>
+          <div class="price-total-lbl">total before tip</div>
+          <div class="price-lines">
+            <div class="price-line"><span>Menu</span><span class="val" id="pc-ue-menu">$30.00</span></div>
+            <div class="price-line up"><span>Hidden markup <small>15-25%</small></span><span class="val" id="pc-ue-up">+$4.50-7.50</span></div>
+            <div class="price-line up"><span>Service fee <small>about 15%</small></span><span class="val" id="pc-ue-fee">+$4.50</span></div>
+          </div>
+          <div class="price-more"><span id="pc-ue-more">$7.51-10.51</span> more than OrderFare</div>
+        </div>
+        <div class="compare-foot">Delivery fees and tips are left out on all three: they depend on distance and go to the restaurant or the driver. The markup and fee ranges come from published rates, listed under Sources at the bottom of this page. Restaurants raise app menu prices to cover the 15-30% commission the apps charge them.</div>
+      </div>
+    </div>
   </div>
 </section>
 
-<!-- ORDER PICKER (shared control for every section below) -->
-<div class="picker-wrap">
-  <div class="picker-sentinel" id="picker-sentinel"></div>
-  <div class="order-picker" id="order-picker">
-    <div class="picker-top">
-      <span class="picker-label">Your order</span>
-    </div>
-    <div class="picker-top" style="margin-top:-14px;">
-      <span class="picker-amount" id="picker-amount" aria-hidden="true">$30</span>
-    </div>
-    <div class="picker-slider-row">
-      <input type="range" class="picker-slider" id="picker-slider" min="10" max="100" step="1" value="30"
-             aria-label="Order amount in dollars" aria-valuetext="$30 order">
-      <div class="picker-exact">
-        <span>$</span>
-        <input type="number" id="picker-exact-input" min="10" max="100" step="1" value="30" inputmode="decimal" aria-label="Enter an exact order amount">
+<!-- COMPARE BAR (compact follower; appears once the compare card scrolls off) -->
+<div class="compare-bar-wrap">
+  <div class="compare-bar" id="compare-bar" aria-hidden="true">
+    <div class="compare-bar-in">
+      <span class="compare-bar-lbl">Order</span>
+      <span class="compare-bar-amt" id="bar-amount">$30</span>
+      <input type="range" class="picker-slider" id="bar-slider" min="10" max="100" step="1" value="30" aria-label="Order price in dollars" tabindex="-1">
+      <div class="compare-bar-prices">
+        <span>OrderFare <b class="good" id="bar-of">$31.49</b></span>
+        <span>DoorDash <b id="bar-dd">$37.50-42.00</b></span>
+        <span>Uber Eats <b id="bar-ue">$39.00-42.00</b></span>
       </div>
-    </div>
-    <div class="picker-chips">
-      <button type="button" class="chip" data-amt="15">$15</button>
-      <button type="button" class="chip" data-amt="30">$30</button>
-      <button type="button" class="chip" data-amt="60">$60</button>
     </div>
   </div>
 </div>
@@ -537,12 +633,13 @@ footer { background: #0F1923; padding: 60px 48px 32px; }
 
   var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  var picker = document.getElementById('order-picker');
+  var compare = document.getElementById('compare');
+  var bar = document.getElementById('compare-bar');
+  var barSlider = document.getElementById('bar-slider');
   var slider = document.getElementById('picker-slider');
   var exactInput = document.getElementById('picker-exact-input');
   var amountEl = document.getElementById('picker-amount');
   var chips = Array.prototype.slice.call(document.querySelectorAll('.chip'));
-  var sentinel = document.getElementById('picker-sentinel');
 
   function round2(n) { return Math.round(n * 100) / 100; }
   function fmt(n) {
@@ -594,14 +691,37 @@ footer { background: #0F1923; padding: 60px 48px 32px; }
     if (document.activeElement !== exactInput) exactInput.value = S;
     chips.forEach(function (c) { c.classList.toggle('active', Number(c.dataset.amt) === S); });
 
-    // ── section a: fee bars ──
+    // ── compare card (hero) + compact bar ──
     var appsFeeLo = 0.10 * S, appsFeeHi = 0.15 * S, appsFeeBar = 0.125 * S;
+    var upliftLo = 0.15 * S, upliftHi = 0.25 * S;
+    var ofTotal = S + 1.49;
+    var ddLo = S + upliftLo + appsFeeLo, ddHi = S + upliftHi + appsFeeHi;
+    var ueFee = 0.15 * S;
+    var ueLo = S + upliftLo + ueFee, ueHi = S + upliftHi + ueFee;
+    tween(document.getElementById('pc-of-total'), ofTotal, fmt, 400);
+    tween(document.getElementById('pc-of-menu'), S, fmt, 400);
+    tween(document.getElementById('pc-dd-total'), [ddLo, ddHi], function (v) { return fmtRange(v[0], v[1]); }, 400);
+    tween(document.getElementById('pc-dd-menu'), S, fmt, 400);
+    tween(document.getElementById('pc-dd-up'), [upliftLo, upliftHi], function (v) { return '+' + fmtRange(v[0], v[1]); }, 400);
+    tween(document.getElementById('pc-dd-fee'), [appsFeeLo, appsFeeHi], function (v) { return '+' + fmtRange(v[0], v[1]); }, 400);
+    tween(document.getElementById('pc-dd-more'), [ddLo - ofTotal, ddHi - ofTotal], function (v) { return fmtRange(v[0], v[1]); }, 400);
+    tween(document.getElementById('pc-ue-total'), [ueLo, ueHi], function (v) { return fmtRange(v[0], v[1]); }, 400);
+    tween(document.getElementById('pc-ue-menu'), S, fmt, 400);
+    tween(document.getElementById('pc-ue-up'), [upliftLo, upliftHi], function (v) { return '+' + fmtRange(v[0], v[1]); }, 400);
+    tween(document.getElementById('pc-ue-fee'), ueFee, function (v) { return '+' + fmt(v); }, 400);
+    tween(document.getElementById('pc-ue-more'), [ueLo - ofTotal, ueHi - ofTotal], function (v) { return fmtRange(v[0], v[1]); }, 400);
+    tween(document.getElementById('bar-amount'), S, function (v) { return '$' + Math.round(v); }, 350);
+    tween(document.getElementById('bar-of'), ofTotal, fmt, 400);
+    tween(document.getElementById('bar-dd'), [ddLo, ddHi], function (v) { return fmtRange(v[0], v[1]); }, 400);
+    tween(document.getElementById('bar-ue'), [ueLo, ueHi], function (v) { return fmtRange(v[0], v[1]); }, 400);
+    if (barSlider) barSlider.value = S;
+
+    // ── section a: fee bars ──
     tween(document.getElementById('bar-apps-num'), [appsFeeLo, appsFeeHi], function (v) { return fmtRange(v[0], v[1]); }, 400);
     setWidth(document.getElementById('bar-apps-fill'), appsFeeBar / FEE_BAR_SCALE * 100);
     setWidth(document.getElementById('bar-ours-fill'), 1.49 / FEE_BAR_SCALE * 100);
 
     // ── section b: receipts ──
-    var upliftLo = 0.15 * S, upliftHi = 0.25 * S;
     var totalLo = S + upliftLo + appsFeeLo, totalHi = S + upliftHi + appsFeeHi;
     tween(document.getElementById('r-menu'), S, fmt, 400);
     tween(document.getElementById('r-uplift'), [upliftLo, upliftHi], function (v) { return '+' + fmtRange(v[0], v[1]); }, 400);
@@ -644,12 +764,18 @@ footer { background: #0F1923; padding: 60px 48px 32px; }
     c.addEventListener('click', function () { onAmount(c.dataset.amt); });
   });
 
-  // Sticky-compact: shrink the picker once its sentinel scrolls out from under the nav.
-  if (sentinel && 'IntersectionObserver' in window) {
+  if (barSlider) barSlider.addEventListener('input', function () { onAmount(this.value); });
+  // Compact bar: slide in once the compare card has scrolled up past the nav.
+  if (compare && bar && 'IntersectionObserver' in window) {
     var obs = new IntersectionObserver(function (entries) {
-      entries.forEach(function (e) { picker.classList.toggle('is-compact', !e.isIntersecting); });
+      entries.forEach(function (e) {
+        var gone = !e.isIntersecting && e.boundingClientRect.top < 66;
+        bar.classList.toggle('on', gone);
+        bar.setAttribute('aria-hidden', gone ? 'false' : 'true');
+        if (barSlider) barSlider.tabIndex = gone ? 0 : -1;
+      });
     }, { threshold: 0, rootMargin: '-66px 0px 0px 0px' });
-    obs.observe(sentinel);
+    obs.observe(compare);
   }
 
   recompute(30);
