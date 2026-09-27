@@ -1,6 +1,6 @@
 # SprintAI — Handoff
 
-Last updated: 2026-09-11
+Last updated: 2026-09-27
 
 What an incoming engineer needs to understand this system and start contributing
 within a day. Not a reference — a map.
@@ -437,6 +437,7 @@ sprintai-ordering/
 │       ├── verify-cycle-4.ts # Cycle 4 verification suite
 │       └── worker.ts         # launchd worker — drains test_run_queue (onboarding QA)
 ├── how-it-works.html         # Mobile sales explainer (signup→kit→2wk→pricing)
+├── why-orderfare.html        # Interactive cost-comparison vs DoorDash/Uber Eats (slider-driven)
 ├── vitos-demo.html            # Vito's Pizza demo page (self-serve, QR-coded)
 ├── docs/demo/                # Erin (NJB) demo kit — 3-QR walkthrough email
 ├── netlify/

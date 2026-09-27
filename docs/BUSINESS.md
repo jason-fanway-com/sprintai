@@ -1,6 +1,6 @@
 # SprintAI — Business
 
-Last updated: 2026-09-13
+Last updated: 2026-09-27
 
 What SprintAI is, who it serves, how it makes money, and why the product is
 built the way it is. For engineers who need business context to make good
@@ -45,6 +45,13 @@ and sign-up — plus a scripted walkthrough) lets a SprintAI rep close a live
 demo on a shop's own phone in minutes: order an item, 86 it from Store Chat,
 and watch the bot refuse it in real time. This is the physical embodiment of
 the pitch — *you keep your customers, your margin, and your name on the sale*.
+
+A companion page, **"Why OrderFare"** (`why-orderfare.html`), makes the cost
+case directly to a skeptical owner: a slider lets them enter their own average
+order size and watch, live, what DoorDash/Uber Eats commissions and hidden
+menu markup would have cost versus OrderFare's flat per-order fee. It exists
+to defuse the most common objection — "we already use a delivery app" — with
+the owner's own numbers instead of a generic pitch.
 
 Two user surfaces:
 
