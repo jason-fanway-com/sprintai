@@ -105,8 +105,8 @@ export function matchChoice(span: string, group: MenuGroup, within?: string[]): 
   const pool0 = within ? group.choices.filter((c) => within.includes(c.id)) : group.choices;
   const pool = pool0.map((c) => ({ ...c, words: c.words.map(singular) }));
   // "bbq, garlic hot, mango habanero": a list names every choice it lists, BBQ included, even though BBQ sits inside Honey Garlic BBQ
-  const parts = splitList(span).filter((p) => optionWords(p).length > 0);
-  if (parts.length > 1) {
+  const parts0 = splitList(span).filter((p) => optionWords(p).length > 0), parts = parts0.filter((p) => !NEGATED.has(optionWords(p)[0])); // "bbq for the bone-in, skip the mango habanero": one flavor named, one declined
+  if (parts0.length > 1 && parts.length === 1) return matchChoice(parts[0], group, within); if (parts.length > 1) {
     const ids = parts.map((p) => matchChoice(p, group, within)).flatMap((m) => m.kind === "one" ? [m.choice_id] : m.kind === "many" ? m.choice_ids : []), u = [...new Set(ids)];
     if (u.length >= 2) return { kind: "many", choice_ids: u };
     if (u.length === 1) return { kind: "one", choice_id: u[0] };
@@ -165,7 +165,7 @@ function applyCanon(line: Line, menu: Menu): void {
   }
 }
 
-const PLACEMENT = new Set(["half", "whole", "pizza", "side", "left", "right"]), NO_TOPPING = new Set(["plain", "regular", "nothing on it", "no toppings"]);
+const PLACEMENT = new Set(["half", "whole", "pizza", "side", "left", "right"]), NO_TOPPING = new Set(["plain", "regular", "nothing on it", "no toppings"]), NEGATED = new Set(["skip", "no", "not", "without", "hold", "minus", "except", "nah", "nope"]);
 const SIZE_ONLY = new Set(["small", "medium", "large", "xlarge", "personal", "regular"]);
 function normalizeUnit(u: string): string { return words(u)[0] ?? u; }
 
@@ -219,7 +219,7 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true)
   for (const g of item.groups) {
     if (g.kind !== "modifier") continue;
     const m = matchChoice(text, g);
-    if (m.kind === "one") { if (!line.modifiers.includes(m.choice_id)) line.modifiers.push(m.choice_id); return true; }
+    if (m.kind === "one") { if (!line.modifiers.includes(m.choice_id)) line.modifiers.push(m.choice_id); delete line.slot_candidates[g.id]; return true; } // the shortlist this answered is spent, or the same question comes back forever (pass 12 #20)
     if (m.kind === "many") { line.slot_candidates[g.id] = m.choice_ids; return true; }
   }
   // 3. a size word that is already the item's own size (derived rows carry size in the name)

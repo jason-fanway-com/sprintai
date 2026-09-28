@@ -37,6 +37,7 @@ const toppings = (gid: string, pep: string, mush: string, bacon: string | null, 
     { id: mush, display: "Mushroom", price_delta_cents: delta },
     { id: mush + "H", display: "Mushroom (Half pizza)", price_delta_cents: delta },
     ...(bacon ? [{ id: bacon, display: "Bacon", price_delta_cents: delta + 150 }] : []),
+    ...(gid === "topL" ? [{ id: "gcW", display: "Grilled Chicken (Whole pizza)", price_delta_cents: 400 }, { id: "gcH", display: "Grilled Chicken (Half pizza)", price_delta_cents: 250 }, { id: "csW", display: "Chicken Steak (Whole pizza)", price_delta_cents: 400 }, { id: "csH", display: "Chicken Steak (Half pizza)", price_delta_cents: 250 }] : []), // live shape (Vito's Hawaiian): "chicken" shortlists four
   ] });
 
 function item(id: string, name: string, category: string, price: number, extra: Partial<RawMenuItem> = {}, steps: RawMenuItem["ask_plan"] extends infer _ ? any[] : never = []): RawMenuItem {

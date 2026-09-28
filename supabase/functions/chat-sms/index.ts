@@ -35,7 +35,7 @@ import { normalizeSlashShorthand } from "./slash-shorthand-normalize-20260916.ts
 import { cartTotalFragment, claimsTotal, computeCartSubtotalCents, extractDollarCents } from "./pricing.ts";
 import { runEngineTurn as runCleanEngineTurn } from "./engine/runner.ts";
 import type { OrderForm as EngineOrderForm } from "./engine/form.ts";
-import { googleGeocoder } from "./engine/address.ts";
+import { googleGeocoder, localityOf } from "./engine/address.ts";
 import { createCheckoutSession, buildEngineCheckoutSessionInput, appendCheckoutLink, type CheckoutLineItemInput } from "./checkout-session.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -2455,7 +2455,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       {
         supabase,
         model: { provider: engineProvider, model: engineModel, apiKey: engineKey, timeoutMs: 20000 },
-        geocoder: googleGeocoder(Deno.env.get("GOOGLE_MAPS_API_KEY") ?? "", { lat: shop.latitude, lng: shop.longitude, radius_mi: shop.delivery_radius_mi }),
+        geocoder: googleGeocoder(Deno.env.get("GOOGLE_MAPS_API_KEY") ?? "", { lat: shop.latitude, lng: shop.longitude, radius_mi: shop.delivery_radius_mi, ...localityOf((shop as { formatted_address?: string | null }).formatted_address) }),
         serviceFeeCents: SERVICE_FEE_CENTS,
         createCheckout: async (req) => {
           const key = req.testMode ? (getTestModeStripeKey() ?? "") : (Deno.env.get("STRIPE_SECRET_KEY") ?? "");

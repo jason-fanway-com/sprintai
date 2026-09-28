@@ -158,7 +158,7 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
       const opts = i.in_cart ? [] : i.item.groups.filter((g) => g.kind === "slot").map((g) => `${title(g.name)}: ${g.choices.map((c) => c.name).slice(0, 6).join(", ")}`); // an item already on the order: its choices were made, do not list them again
       const sizes = i.sizes ? sortSizes(i.sizes.map((x) => x.name)) : null;
       const money = !i.price ? null : sizes ? sizes.map((n) => `${title(n)} ${dollars(i.sizes!.find((x) => x.name === n)!.cents)}`).join(", ") : dollars(i.unit_cents);
-      if (sizes && !i.price) opts.unshift(`Sizes: ${sizes.map(title).join(", ")}`);
+      if (sizes && !i.price && !i.in_cart) opts.unshift(`Sizes: ${sizes.map(title).join(", ")}`);
       parts.push((i.answer ? T.yesWeHave() + " " : "") + T.itemInfo(sizes ? title(i.item.facets.kind ?? i.item.display_name) : i.item.display_name, money, opts, i.item.description));
     } else if (i.kind === "eta") parts.push(T.eta(form.fulfillment));
     else if (i.kind === "welcome") parts.push(T.youreWelcome());

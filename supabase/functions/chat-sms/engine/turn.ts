@@ -104,7 +104,7 @@ export function turn(input: TurnInput): TurnOutput {
   }
   // "one of each except sweet potato" -> seven adds of "fries", one kind each: "fries" is not in the message, but every kind is a candidate of the line we asked about: a split, not inventions
   if (focus && focus.status.kind === "ambiguous") {
-    const cands = focus.status.candidates, one = (text: string) => narrow(cands, text, menu).length === 1;
+    const cands = focus.status.candidates, one = (text: string) => narrow(cands, text, menu).length === 1 || (narrow(cands, text, menu).length === 0 && resolveSpan(text, menu).kind === "item"); // "turkey club" when the list showed nine other sandwiches: named outright, it is a kind too
     const tokens = (text: string) => (({ count, rest }) => one(rest || text) ? [{ span: rest || text, qty: count ?? 1 }] : null)(leadingCount(text)) ?? countedPieces(text);
     // each add or answer naming exactly one kind of the asked-about line is a part ("fries"+["crazy"], "crazy fries", the answer "Bacon Cheese", "one plain one pepperoni")
     const partsOf = (m: Move) => m.kind === "add_line" ? (one([m.item_span, ...m.option_spans].join(" ")) && (lineMatchesSpan(focus, m.item_span, menu) || cands.some((id) => lineMatchesSpan({ ...focus, item_id: id }, m.item_span, menu))) ? [{ span: [m.item_span, ...m.option_spans].join(" "), qty: Math.max(1, m.qty) }] : [])
@@ -118,7 +118,7 @@ export function turn(input: TurnInput): TurnOutput {
       parts = kinds.filter((k) => !words(k).filter((w) => !shared.includes(w)).every((w) => mw.includes(w))).map((k) => ({ span: k, qty: 1 }));
     } else for (const o of rec.omissions) if (one(o.span) && !parts.some((p) => narrow(cands, p.span, menu)[0] === narrow(cands, o.span, menu)[0] || findWordRun(mw, [...words(p.span), ...words(o.span)]) >= 0 || findWordRun(mw, [...words(o.span), ...words(p.span)]) >= 0)) parts.push({ span: o.span, qty: o.qty }); // a kind the model left out ("one plain, ..."); "turkey sandwich" is one mention, not turkey plus a sandwich
     const pos = (span: string) => { const i = mw.indexOf(words(span).find((w) => !STOPWORDS.has(w)) ?? ""); return i < 0 ? 999 : i; }; // lines in the order the customer said them
-    parts = parts.reduce<typeof parts>((acc, p) => { const same = acc.find((q) => narrow(cands, q.span, menu)[0] === narrow(cands, p.span, menu)[0]); if (same) same.qty += p.qty; else acc.push({ ...p }); return acc; }, []); // "cheesesteak sandwich for both of em": one answer said twice is one answer, not two lines
+    const kindOf = (span: string) => narrow(cands, span, menu)[0] ?? (resolveSpan(span, menu) as { id?: string }).id ?? span; parts = parts.reduce<typeof parts>((acc, p) => { const same = acc.find((q) => kindOf(q.span) === kindOf(p.span)); if (same) same.qty += p.qty; else acc.push({ ...p }); return acc; }, []); // "cheesesteak sandwich for both of em": one answer said twice is one answer, not two lines
     parts.sort((x, y) => pos(x.span) - pos(y.span));
     if (parts.length >= 2 || (parts.length === 1 && focus.qty > 1 && parts[0].qty === focus.qty)) {
       const aboutFocus = (m: Move) => (m.kind === "add_line" && lineMatchesSpan(focus, m.item_span, menu)) || ((m.kind === "change_line" || m.kind === "remove_line") && ("line_id" in m.ref ? m.ref.line_id === focus.line_id : "span" in m.ref && lineMatchesSpan(focus, m.ref.span, menu)));
@@ -166,6 +166,7 @@ export function turn(input: TurnInput): TurnOutput {
     if (m.kind === "answer_option" && m.line_id !== undefined) { // "white bread for both chicken parms" pointed at the cheesesteak: the words name the line
       const named = form0.lines.filter((l) => l.item_id && l.status.kind !== "complete" && contentWords(m.value_span).some((w) => menu.items.get(l.item_id!)!.words.some((iw) => sameWord(iw, w) || (w.length >= 4 && iw.startsWith(w)))));
       if (named.length === 1 && named[0].line_id !== m.line_id) { ledger.push({ turn: t, event: "answer_rerouted_to_named_line", data: { span: m.value_span, from: m.line_id, line_id: named[0].line_id } }); moves.push({ ...m, line_id: named[0].line_id }); continue; }
+      if (named.length === 0 && focus && m.line_id !== focus.line_id && spanAnswersLine(focus, m.value_span, menu)) { ledger.push({ turn: t, event: "answer_kept_on_asked_line", data: { span: m.value_span, from: m.line_id } }); moves.push({ ...m, line_id: undefined }); continue; } // "bbq dude" while we ask the bone-in: the line we asked, not the one the model guessed
     }
       // "3 thin sicilians. one pepperoni, one sausage, one plain": options each preceded by a count that adds up to the quantity are one line each
     if (m.kind === "add_line" && m.qty >= 2 && m.option_spans.length >= 2) {
@@ -278,7 +279,7 @@ export function turn(input: TurnInput): TurnOutput {
     ledger.push({ turn: t, event: "cart_question_answered", data: { span, has: !!onOrder } }); break;
   }
   const askedItem = typeof res.askMenu === "string" && isQuestion(input.message) ? menuInfo(res.askMenu, menu, false) : null; // "do you have hot dogs?": the next question is "want one?"
-  if (askedItem?.kind === "item" && !form.lines.some((l) => l.item_id === askedItem.item.id) && !form.omissions.some((o) => o.span === words(askedItem.item.display_name).join(" "))) form.omissions.push({ span: words(askedItem.item.display_name).join(" "), qty: 1, declined: false, offer: true });
+  if (askedItem?.kind === "item" && !form.lines.some((l) => l.item_id && (l.item_id === askedItem.item.id || (menu.items.get(l.item_id)!.facets.kind === askedItem.item.facets.kind && !!askedItem.item.facets.kind && menu.items.get(l.item_id)!.category === askedItem.item.category))) && !form.omissions.some((o) => o.span === words(askedItem.item.display_name).join(" "))) form.omissions.push({ span: words(askedItem.item.display_name).join(" "), qty: 1, declined: false, offer: true });
   for (const om of rec.omissions) {
     if (refSpans.some((r) => isWordSubset(words(om.span), r) || isWordSubset(r, words(om.span)))) continue; // "scratch the soup": removed, not forgotten
     if (remarkOnly && !rec.omissions.some(strong)) { ledger.push({ turn: t, event: "omission_ignored_in_remark", data: { span: om.span } }); continue; }
@@ -371,7 +372,8 @@ export function turn(input: TurnInput): TurnOutput {
   if (cartAnswer) info = cartAnswer;
   const aboutFocus = (about: string) => { const r = resolveSpan(about, menu), fid = focus?.item_id; return r.kind === "none" || (!!fid && (r.kind === "item" ? r.id === fid : r.ids.includes(fid))); }; // "what flavors u got?", "what wings do you have?" while we ask the wings' flavor: the flavors
   if (res.askMenu !== undefined) info = res.askMenu === null && input.form.open?.kind === "line_ambiguous" ? null : (res.askMenu === null || (input.form.open?.kind === "line_slot" && aboutFocus(res.askMenu))) && input.form.open && "line_id" in input.form.open ? questionOptions(input.form, menu) : menuInfo(res.askMenu, menu, asksPrice(input.message));
-  if (info?.kind === "item") info = { ...info, answer: asksHave(input.message), in_cart: form.lines.some((l) => l.item_id === (info as { item: { id: string } }).item.id && l.status.kind === "complete") }; // "do you have X?" gets "Yes, we do."; "what comes on X?" does not; an item already ordered is not offered its choices again
+  const sameKind = (a: string, b: string) => { const x = menu.items.get(a), y = menu.items.get(b); return !!x && !!y && (a === b || (!!x.facets.kind && x.facets.kind === y.facets.kind && x.category === y.category)); }; // the medium of a pizza already ordered as a large is the same thing
+  if (info?.kind === "item") info = { ...info, answer: asksHave(input.message), in_cart: form.lines.some((l) => l.item_id && l.status.kind === "complete" && sameKind(l.item_id, (info as { item: { id: string } }).item.id)) }; // "do you have X?" gets "Yes, we do."; "what comes on X?" does not; an item already ordered is not offered its choices again
   if (asksWait(input.message) && !info) info = { kind: "eta" }; // "how long is the wait?": the same promise the pay sentence makes
   if (res.control?.what === "human") info = { kind: "human" };
   if (res.control?.what === "cancel") info = { kind: "cancelled" };

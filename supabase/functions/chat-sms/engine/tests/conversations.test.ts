@@ -10,7 +10,7 @@ import { narrow } from "../resolve.ts";
 import { closedAnswer } from "../vocab.ts";
 import { totals } from "../price.ts";
 import { words, closestWord, faithfulRewrite } from "../normalize.ts";
-import { streetChanged } from "../address.ts";
+import { streetChanged, localityOf, googleGeocoder } from "../address.ts";
 
 const menu = fixtureMenu();
 const addr = (text: string) => ({ kind: "answer", field: "address", value: { text, formatted: text, validated: true, zone_ok: true } } as Move);
@@ -1629,4 +1629,67 @@ Deno.test("pass 11 #9: an offer ('want one?') is dropped once the item is on the
   o = say(f, "and a sicilian special", [{ kind: "add_line", item_span: "sicilian special", qty: 1, option_spans: [] }]); f = o.form; assertEquals(f.open?.kind, "line_unresolved");
   o = say(f, "i mean the large pepperoni pizza", [{ kind: "add_line", item_span: "large pepperoni pizza", qty: 1, option_spans: [] }]); f = o.form;
   assertEquals(f.lines[2].item_id, IDS.pepPizzaL, o.reply); assert(!o.ledger.some((e) => e.event === "taught_term"), "a three-size pizza's large row is not what 'sicilian special' means");
+});
+
+Deno.test("pass 12: 'oh wait, add knots' is not a question about the wait; 'how long' is", () => {
+  let f = newForm("vitos", "test-v1");
+  let o = say(f, "pickup"); f = o.form;
+  o = say(f, "a cheeseburger", [{ kind: "add_line", item_span: "cheeseburger", qty: 1, option_spans: [] }]); f = o.form;
+  o = say(f, "oh wait actually add garlic knots too", [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]); f = o.form;
+  assert(!o.reply.includes("min"), o.reply);
+  o = say(f, "medium. and how long is the wait usually", [{ kind: "answer_option", value_span: "medium" }]); f = o.form;
+  assertStringIncludes(o.reply, "About 10-15 min after you pay.");
+});
+
+Deno.test("pass 12 #20: a topping picked from a shortlist applies and the question ends; a numbered pick too", () => {
+  let f = newForm("vitos", "test-v1");
+  let o = say(f, "pickup"); f = o.form;
+  o = say(f, "large cheese pizza with chicken", [{ kind: "add_line", item_span: "large cheese pizza", qty: 1, option_spans: ["chicken"] }]); f = o.form;
+  assertEquals(f.open?.kind, "line_slot", o.reply); assertEquals(f.lines[0].slot_candidates[IDS.toppingsL]?.length, 4);
+  o = say(f, "grilled chicken on the whole pizza", [{ kind: "answer_option", value_span: "grilled chicken on the whole pizza" }]); f = o.form;
+  assertEquals(f.lines[0].status.kind, "complete", o.reply); assertEquals(f.lines[0].modifiers, ["gcW"]); assertEquals(Object.keys(f.lines[0].slot_candidates).length, 0); assertEquals(f.open?.kind, "items"); // pass 12 #20 asked four times and dropped the pizza
+  assertEquals(totals(f, menu).subtotal_cents, 1800 + 400);
+  f = newForm("vitos", "test-v1"); o = say(f, "pickup"); f = o.form;
+  o = say(f, "large cheese pizza with chicken", [{ kind: "add_line", item_span: "large cheese pizza", qty: 1, option_spans: ["chicken"] }]); f = o.form;
+  o = say(f, "1"); f = o.form; // the numbered pick against the shortlist
+  assertEquals(f.lines[0].status.kind, "complete", o.reply); assertEquals(f.lines[0].modifiers, ["gcW"]); assertEquals(f.open?.kind, "items");
+});
+
+Deno.test("pass 12 #6: a declined flavor in a list is not a candidate; an answer that fits the asked line stays with it", () => {
+  let f = newForm("vitos", "test-v1");
+  let o = say(f, "pickup"); f = o.form;
+  o = say(f, "bone in wings and a cheeseburger", [{ kind: "add_line", item_span: "bone in wings", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "cheeseburger", qty: 1, option_spans: [] }]); f = o.form;
+  assertEquals((f.open as { line_id: number }).line_id, 1);
+  o = say(f, "bbq for the wings, skip the mild", [{ kind: "answer_option", value_span: "bbq for the wings, skip the mild" }]); f = o.form;
+  assertEquals(f.lines[0].choices["wingFl"], "flBBQ", o.reply); assertEquals((f.open as { line_id: number }).line_id, 2);
+  o = say(f, "medium well dude", [{ kind: "answer_option", value_span: "medium well dude", line_id: 1 }]); f = o.form; // the model pointed at the wings; the temp fits the burger we asked about
+  assertEquals(f.lines[1].choices[IDS.tempGroup], IDS.tempMedWell, o.reply); assertEquals(f.open?.kind, "items");
+});
+
+Deno.test("pass 12 #18: a kind named outright that the shown list missed is still one of the kinds; the counts split the line", () => {
+  let f = newForm("vitos", "test-v1");
+  let o = say(f, "pickup"); f = o.form;
+  o = say(f, "3 sandwiches", [{ kind: "add_line", item_span: "sandwiches", qty: 3, option_spans: [] }]); f = o.form;
+  assertEquals(f.open?.kind, "line_ambiguous", o.reply); // cheesesteak or chicken parm
+  o = say(f, "one turkey, one cheesesteak, and one more turkey", [{ kind: "answer_option", value_span: "turkey" }, { kind: "answer_option", value_span: "cheesesteak" }, { kind: "answer_option", value_span: "turkey" }]); f = o.form;
+  assertEquals(f.lines.map((l) => [l.item_id, l.qty]), [["tky", 2], [IDS.cheesesteak, 1]], o.reply);
+});
+
+Deno.test("pass 12 #15: 'what comes on X' for a pizza already ordered in another size lists no choices and offers nothing", () => {
+  let f = newForm("vitos", "test-v1");
+  let o = say(f, "pickup"); f = o.form;
+  o = say(f, "medium pepperoni pizza", [{ kind: "add_line", item_span: "medium pepperoni pizza", qty: 1, option_spans: [] }]); f = o.form;
+  o = say(f, "what comes on the pepperoni pizza btw", [{ kind: "ask_menu", about_span: "pepperoni pizza" }]); f = o.form;
+  assert(!o.reply.includes("Want one?"), o.reply); assert(!o.reply.includes("Sizes:"), o.reply); assertEquals(f.omissions.filter((x) => !x.declined).length, 0);
+});
+
+Deno.test("pass 12 #10: the geocoder tries the shop's own town first, then the country; the town comes from the shop's address", async () => {
+  assertEquals(localityOf("5620 Cetronia Rd, Allentown, PA 18106, USA"), { locality: "Allentown", region: "PA" });
+  assertEquals(localityOf(null), { locality: null, region: null });
+  const calls: string[] = [];
+  const fake = ((url: string) => { calls.push(url); const town = url.includes("locality"); return Promise.resolve(new Response(JSON.stringify(town ? { status: "ZERO_RESULTS", results: [] } : { status: "OK", results: [{ formatted_address: "3300 Hamilton Blvd, Bethlehem, PA 18017, USA", geometry: { location: { lat: 40.57, lng: -75.57 }, location_type: "ROOFTOP" } }] }))); }) as unknown as typeof fetch;
+  const geo = googleGeocoder("k", { lat: 40.5713954, lng: -75.571226, radius_mi: 5, locality: "Allentown", region: "PA" }, fake);
+  const a = await geo("3300 hamilton blvd");
+  assertEquals(calls.length, 2); assertStringIncludes(decodeURIComponent(calls[0]), "locality:Allentown|administrative_area:PA"); assert(!calls[1].includes("locality"));
+  assertEquals(a.validated, true); assertStringIncludes(a.formatted ?? "", "Bethlehem");
 });

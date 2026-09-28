@@ -571,3 +571,38 @@ public-site allowlist, the stale $0.99 lines on how-it-works and the checkout pa
 merge window and fast-forwarded main (686e7011); Netlify publishes from main. Crew machine: the file courier is loaded
 again (idle-cost zero); the gateway's 60-minute heartbeat poll is a small recurring model call Jason has not yet ruled on.
 
+
+**2026-09-27, pass 11 (40 conversations) and the A–F batch (v665, v666).** Jason asked for 40 Jason-style conversations with
+varied ordering sequences (five new tester quirks: address first, one item per text, a change after the pay link, an
+opening question, everything in one text). 40 ran on v664 for $0.73: 35 reached a pay link; the losses were money or
+dead ends, not style. Ranked list in `~/Downloads/2026-09-27-pass11-defects.md`; Jason approved A–F. Root causes, from the
+ledger, not the transcript: **A** four re-listed names were all taken as answers to the first unknown line (the other two
+unknown lines then bound through a lexicon row the engine had just taught itself, "grilled chicken sandwiches" =
+bacon-ranch wrap; three "flour tortilla" answers each completed another copy; the customer's "I only want ONE" was read as
+"take one off" three times). **B** "medium well" with no line question open became an item search, and each new answer
+counted as progress, so the repeat ladder never moved and "couldn't find" repeated forever. **C** "the large gyro pizza"
+while we asked which pizza was neither an answer (no shared word with "pie") nor an add. **D** a list of flavors dropped
+BBQ and Hot because longer names contain them, then "bbq" could only match Honey Garlic BBQ. **E** the geocoder ran with
+no bias to the shop: "2222 w union st" came back as Union St and was read back as fact; "3300 hamilton blvd" landed out
+of area. **F** a thank-you after the link re-sent the pay sentence in 38 of 40 conversations because a `talk` move counted
+as progress. Landed (8558f7c0 = chat-sms v665, 157 tests): names pair with the unknown lines one each; "only want one" is
+a quantity; a slot value with no question changes that slot or restates it; an unresolved answer is spent (ladder moves,
+line dropped after three); a same-category item answers the kind question; a list of choices is all of them and a whole
+choice name wins over a shortlist; the geocoder is biased to the shop's bounds and a dropped directional is read back
+("I read that as… send the address again"); after the link: thanks → "You're welcome!", "how long" → the time, a question
+we cannot answer → the shop's number, the link only when asked. Also: "X and Y" as one add splits; "remove number 2";
+a pick number is never a kitchen note; an offer already on the order is not asked; a word is taught only when it became
+one item and never a sized row. Data: the two wrongly taught rows deactivated; `pie`/`pies` added as Pizza category terms
+for Vito's and the 15 item-tagged `pie` rows retired (so "large pie" asks which of all pizzas, not five). Canary updated
+(thanks → no pay sentence; "send the link again" → link). **Pass 12** (20 conversations on v665, $0.34): 20/20 landed,
+0 "couldn't find", 145 turns. It exposed one regression of mine (the word "wait" in "oh wait, add knots" triggered the
+wait-time line) and three more money shapes fixed in the same day (v666): a topping picked from a shortlist never cleared
+the shortlist, so the same question repeated and the pizza was dropped at the third ask (the customer paid for a Hawaiian
+without the chicken); "one turkey, one turkey club, one turkey" lost the Turkey Club because the list the engine showed
+did not contain it; "bbq for the bone-in, skip the mango habanero" made Mango Habanero a candidate; an answer the model
+pointed at the other wings line now stays with the line we asked when it fits and names nothing; "what comes on X" for a
+pizza already ordered in another size no longer lists sizes or offers one; the geocoder tries the shop's own town first
+(from `shops.formatted_address`), then the country. 163 tests, core 2,000/2,000. Not fixed, listed for the second batch:
+hours/closing questions ignored, "which one?" floods (Greek pizza → 8 of 78 plus a 16-item dump), the "Got the X too. One
+question about it next." paragraphs, "one of each" on a single multi-flavor item, "Yes, we do" on what's-in questions,
+item names as kitchen notes ("ranch" ordered as a side), "sub" and "2 liter" vocabulary, the Fish Sandwich temp slot.
