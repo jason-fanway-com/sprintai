@@ -104,6 +104,16 @@ export function matchChoice(span: string, group: MenuGroup, within?: string[]): 
   if (sw.length === 0) return { kind: "none" };
   const pool0 = within ? group.choices.filter((c) => within.includes(c.id)) : group.choices;
   const pool = pool0.map((c) => ({ ...c, words: c.words.map(singular) }));
+  // "bbq, garlic hot, mango habanero": a list names every choice it lists, BBQ included, even though BBQ sits inside Honey Garlic BBQ
+  const parts = splitList(span).filter((p) => optionWords(p).length > 0);
+  if (parts.length > 1) {
+    const ids = parts.map((p) => matchChoice(p, group, within)).flatMap((m) => m.kind === "one" ? [m.choice_id] : m.kind === "many" ? m.choice_ids : []), u = [...new Set(ids)];
+    if (u.length >= 2) return { kind: "many", choice_ids: u };
+    if (u.length === 1) return { kind: "one", choice_id: u[0] };
+  }
+  // a whole choice name is that choice, whatever shortlist an earlier answer left ("bbq" after a list that dropped BBQ)
+  const wholeExact = group.choices.filter((c) => sameWords(c.words.map(singular), sw));
+  if (wholeExact.length === 1) return { kind: "one", choice_id: wholeExact[0].id };
   const exact = pool.filter((c) => sameWords(c.words, sw));
   if (exact.length === 1) return { kind: "one", choice_id: exact[0].id };
   // "steak" among Steak (Half), Steak (Whole), Chicken Steak (Half/Whole): the choices whose
@@ -242,7 +252,7 @@ export function bindLine(line: Line, menu: Menu): void {
     if (line.status.kind === "ambiguous") cands = line.status.candidates;
     else {
       const r = resolveSpan(line.span, menu);
-      if (r.kind === "none") { line.status = { kind: "unresolved" }; return; }
+      if (r.kind === "none") { line.status = { kind: "unresolved" }; line.answers = []; return; } // an answer that named nothing is spent: the same question again is a repeat, and the repeat ladder counts it
       cands = r.kind === "item" ? [r.id] : r.ids;
     }
     // several bundles ("half dozen" vs "one dozen"): the span's own count, or the picks' total, decides
@@ -273,7 +283,7 @@ export function bindLine(line: Line, menu: Menu): void {
       if (n.length >= 1 && n.length < cands.length) cands = n; else if (n.length === 0 && r?.kind === "item") cands = [r.id]; // named an item the list missed
       else if (n.length === 0) { // "french fries extra crispy": the words that name a kind narrow; the rest ride along as the customer's instruction
         const ws = contentWords(a), hit = ws.filter((w) => { const k = narrow(cands, w, menu).length; return k >= 1 && k < cands.length; }), n2 = hit.length ? narrow(cands, hit.join(" "), menu) : [];
-        if (n2.length === 1) { cands = n2; const rest = ws.filter((w) => !hit.includes(w) && narrow(n2, w, menu).length === 0); if (rest.length) line.held.push(rest.join(" ")); }
+        if (n2.length === 1) { cands = n2; const rest = ws.filter((w) => !hit.includes(w) && narrow(n2, w, menu).length === 0 && !isDigits(w) && w !== "number"); if (rest.length) line.held.push(rest.join(" ")); } // "turkey number 1": the pick is not an instruction
       }
       if (r?.kind === "item" && cands.length === 1 && cands[0] === r.id && contentWords(menu.items.get(r.id)!.display_name).every((iw) => isDigits(iw) || words(a).some((w) => sameWord(iw, w)))) line.span = a; // the answer IS the item's whole name ("italian hoagie", not "boneless"): the first span's leftover words ("chicken" of "chicken cheesestake sandwich") were never options
     }

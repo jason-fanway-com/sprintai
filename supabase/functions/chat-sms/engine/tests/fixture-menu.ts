@@ -107,7 +107,10 @@ export const RAW_ITEMS: RawMenuItem[] = [
   ]),
   item(IDS.cheesesteak, "Cheesesteak", "Hoagies", 1049),
   item("roll", "Pepperoni", "Stromboli Rolls", 999),
-  item("wbi", "Wings Bone-In - 10 Pieces", "Appetizers", 1299, { display_name: "Wings Bone-In - 10 Pieces" }),
+  item("wbi", "Wings Bone-In - 10 Pieces", "Appetizers", 1299, { display_name: "Wings Bone-In - 10 Pieces" }, [
+    { group_id: "wingFl", slot_key: "flavor", kind: "slot", ask_mode: "ask", prompt_template: "flavor.ask", // live shape: BBQ sits inside Honey Garlic BBQ, Hot inside Garlic Hot
+      choices: [{ id: "flBBQ", display: "BBQ", price_delta_cents: 0 }, { id: "flHot", display: "Hot", price_delta_cents: 0 }, { id: "flGH", display: "Garlic Hot", price_delta_cents: 0 }, { id: "flHGB", display: "Honey Garlic BBQ", price_delta_cents: 0 }, { id: "flMild", display: "Mild", price_delta_cents: 0 }] },
+  ]),
   item("wbo", "Wings Boneless - 10 Pieces", "Appetizers", 1199, { display_name: "Wings Boneless - 10 Pieces" }),
   item("coke", "Coke", "Beverages", 299), item("dcoke", "Diet Coke", "Beverages", 299),
   item("bg-plain", "Plain Bagel", "Bagels", 150),

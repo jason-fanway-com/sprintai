@@ -49,6 +49,11 @@ QUIRKS = [
     ("kinds_list", "order several of one thing at once ('4 large pizzas', '3 subs') and when asked what kind, answer with 'one X, one Y, one Z' naming real kinds from the list you are shown"),
     ("one_of_each", "order 'some' of one thing that comes in kinds, and when asked what kind say you'll take one of each except one kind you name from the list"),
     ("complain", "if the shop ever says it could not find something you know is on the menu, push back in one short annoyed sentence"),
+    ("address_first", "open by saying it is for delivery and giving your address before you name any food"),
+    ("one_at_a_time", "send your items one per message, one after another, even while the shop is still asking about the last one"),
+    ("post_link_change", "after the pay link arrives, add one more item or remove one instead of a remark, then answer whatever comes back"),
+    ("start_question", "open with a question about the menu (hours, a topping, a size) before you order anything"),
+    ("all_at_once", "put everything in your very first message: every item with counts, pickup or delivery with address, and your name"),
 ]
 
 def llm(messages, max_tokens=60):

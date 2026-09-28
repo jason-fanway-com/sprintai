@@ -1,7 +1,7 @@
 // form.ts — the order form (state), the moves that may change it, the ledger,
 // and the pure reducer `apply`. Code owns everything in here. No text matching.
 
-import { contentWords, optionKey, validTalk, isWordSubset, words, isDigits } from "./normalize.ts";
+import { contentWords, optionKey, validTalk, isWordSubset, words, isDigits, leadingCount } from "./normalize.ts";
 
 export type Fulfillment = "pickup" | "delivery";
 
@@ -10,6 +10,8 @@ export interface Address {
   formatted: string | null;
   validated: boolean;
   zone_ok: boolean;
+  /** the geocoder read the street differently from what was typed ("w union st" -> "Union St"): say so, take a correction */
+  read_as?: boolean;
 }
 
 export type Tip = { kind: "percent"; value: number } | { kind: "cents"; value: number };
@@ -153,6 +155,9 @@ function newLine(form: OrderForm, span: string, qty: number, held: string[], ext
   return { line_id: form.next_line_id++, span, item_id: null, qty: Math.max(1, qty), choices: {}, modifiers: [], held, notes: [], slot_candidates: {}, status: { kind: "unresolved" }, ...extra };
 }
 
+const REF_FILLER = new Set(["number", "num", "no", "option", "item", "line", "the", "pick", "choice"]);
+/** "2", "number 2", "option 2": the numbered entry of the list we just showed; null otherwise */
+function refDigit(span: string): number | null { const w = words(span).filter((x) => !REF_FILLER.has(x)); if (w.length !== 1) return null; if (isDigits(w[0])) return parseInt(w[0], 10); const lc = leadingCount(w[0] + " x"); return lc.count !== null && lc.count > 0 ? lc.count : null; }
 export type LineMatcher = ((line: Line, span: string) => boolean) & { named?: (line: Line, span: string) => boolean };
 export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: LineMatcher): ApplyResult {
   const form: OrderForm = structuredClone(input);
@@ -182,7 +187,8 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: LineMatc
     if ("line_id" in ref) return live.some((l) => l.line_id === ref.line_id) ? [ref.line_id] : [];
     if ("ordinal" in ref) { const l = live[ref.ordinal - 1]; return l ? [l.line_id] : []; }
     if ("last" in ref) return live.length === 1 ? [live[0].line_id] : (live.length ? [live[live.length - 1].line_id] : []);
-    if (isDigits(ref.span)) { const i = parseInt(ref.span, 10) - 1, pick = form.open?.kind === "line_ref" ? form.open.candidates[i] : live[i]?.line_id; return pick !== undefined && live.some((l) => l.line_id === pick) ? [pick] : []; } // "cancel the first one" against the list we just showed
+    const digit = refDigit(ref.span);
+    if (digit !== null) { const i = digit - 1, pick = form.open?.kind === "line_ref" ? form.open.candidates[i] : live[i]?.line_id; return pick !== undefined && live.some((l) => l.line_id === pick) ? [pick] : []; } // "cancel the first one" against the list we just showed
     const overlap = live.filter((l) => lineSpanMatcher(l, ref.span)), named = overlap.filter((l) => lineSpanMatcher.named?.(l, ref.span));
     const hitLines = named.length > 0 ? named : overlap; // "cheesesteak salad" names the salad line; it only overlaps the pending "cheesesteak" line
     const hits = hitLines.map((l) => l.line_id);
@@ -207,33 +213,22 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: LineMatc
       case "answer": {
         if (m.field === "fulfillment") {
           if (form.fulfillment !== m.value) reopenIfConfirmed(); // pickup <-> delivery changes the fee
-          form.fulfillment = m.value;
-          if (m.value === "pickup") { form.address = null; form.tip = form.tip ?? null; }
+          form.fulfillment = m.value; if (m.value === "pickup") form.address = null;
           ledger.push({ turn: t, event: "answer", data: { field: "fulfillment", value: m.value } });
         } else if (m.field === "address") {
           const zipOf = (x?: string | null) => words(x ?? "").find((w) => w.length === 5 && isDigits(w));
           let value = m.value; const had = form.address?.formatted, said = zipOf(value.text), hadZip = zipOf(had);
           if (said && hadZip && said !== hadZip && value.validated && value.formatted === had) { value = { ...value, formatted: had!.replace(hadZip, said) }; ledger.push({ turn: t, event: "address_zip_corrected_by_customer", data: { from: hadZip, to: said } }); } // "its 18103 not 18104": their ZIP, our street
           const ok = value.validated && value.zone_ok;
-          if (!value.validated) declines.push({ code: "address_not_found", span: value.text });
-          else if (!value.zone_ok) declines.push({ code: "address_out_of_zone", span: value.text });
-          form.address = { ...value };
-          if (ok && form.fulfillment === null) form.fulfillment = "delivery";
+          if (!value.validated) declines.push({ code: "address_not_found", span: value.text }); else if (!value.zone_ok) declines.push({ code: "address_out_of_zone", span: value.text });
+          form.address = { ...value }; if (ok && form.fulfillment === null) form.fulfillment = "delivery";
           ledger.push({ turn: t, event: "answer", data: { field: "address", value: value, accepted: ok } });
         } else if (m.field === "tip") {
-          const v = m.value;
-          const bad = (v.kind === "percent" && (v.value < 0 || v.value > 100)) || (v.kind === "cents" && (v.value < 0 || v.value > 50000));
-          if (bad) declines.push({ code: "tip_out_of_range" });
-          else { if (JSON.stringify(form.tip) !== JSON.stringify(v)) reopenIfConfirmed(); form.tip = v; } // a new tip after the link is a new total: the link must be remade
+          const v = m.value, bad = (v.kind === "percent" && (v.value < 0 || v.value > 100)) || (v.kind === "cents" && (v.value < 0 || v.value > 50000));
+          if (bad) declines.push({ code: "tip_out_of_range" }); else { if (JSON.stringify(form.tip) !== JSON.stringify(v)) reopenIfConfirmed(); form.tip = v; } // a new tip after the link is a new total: the link must be remade
           ledger.push({ turn: t, event: "answer", data: { field: "tip", value: v, accepted: !bad } });
-        } else if (m.field === "items_done") {
-          form.items_done = true;
-          ledger.push({ turn: t, event: "answer", data: { field: "items_done" } });
-        } else if (m.field === "confirmed") {
-          if (m.value) { form.confirmed = true; form.status = "awaiting_payment"; }
-          else { form.confirmed = false; form.status = "open"; }
-          ledger.push({ turn: t, event: "answer", data: { field: "confirmed", value: m.value } });
-        }
+        } else if (m.field === "items_done") { form.items_done = true; ledger.push({ turn: t, event: "answer", data: { field: "items_done" } }); }
+        else if (m.field === "confirmed") { form.confirmed = m.value; form.status = m.value ? "awaiting_payment" : "open"; ledger.push({ turn: t, event: "answer", data: { field: "confirmed", value: m.value } }); }
         break;
       }
       case "add_line": {
@@ -258,9 +253,7 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: LineMatc
       case "remove_line": {
         if (form.lines.length === 0) { declines.push({ code: "nothing_to_remove" }); break; }
         const target = targetLine(m); if (!target) break;
-        const [gone] = form.lines.splice(form.lines.indexOf(target), 1);
-        removed.push({ line_id: gone.line_id, item_id: gone.item_id, span: gone.span });
-        ledger.push({ turn: t, event: "remove_line", data: { line_id: gone.line_id } });
+        const [gone] = form.lines.splice(form.lines.indexOf(target), 1); removed.push({ line_id: gone.line_id, item_id: gone.item_id, span: gone.span }); ledger.push({ turn: t, event: "remove_line", data: { line_id: gone.line_id } });
         break;
       }
       case "answer_option": {
@@ -318,24 +311,11 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: LineMatc
         ledger.push({ turn: t, event: "split_line", data: { from: src.line_id, parts: m.parts, into: newLines.map((l) => l.line_id) } });
         break;
       }
-      case "talk": {
-        talk = validTalk(m.text); // defense in depth: the same gate the interpreter applies
-        ledger.push({ turn: t, event: talk ? "talk" : "talk_rejected", data: { text: m.text } });
-        break;
-      }
-      case "ask_menu": {
-        askMenu = m.about_span;
-        ledger.push({ turn: t, event: "ask_menu", data: { about: m.about_span } });
-        break;
-      }
+      case "talk": { talk = validTalk(m.text); ledger.push({ turn: t, event: talk ? "talk" : "talk_rejected", data: { text: m.text } }); break; } // defense in depth: the same gate the interpreter applies
+      case "ask_menu": { askMenu = m.about_span; ledger.push({ turn: t, event: "ask_menu", data: { about: m.about_span } }); break; }
       case "control": {
         control = m;
-        if (m.what === "cancel" || m.what === "start_over") {
-          const keep = newForm(form.shop_id, form.menu_version);
-          keep.turn_no = form.turn_no;
-          if (m.what === "cancel") keep.status = "abandoned";
-          Object.assign(form, keep);
-        }
+        if (m.what === "cancel" || m.what === "start_over") { const keep = newForm(form.shop_id, form.menu_version); keep.turn_no = form.turn_no; if (m.what === "cancel") keep.status = "abandoned"; Object.assign(form, keep); }
         if (m.what === "show_cart") showCart = true;
         ledger.push({ turn: t, event: "control", data: { what: m.what } });
         break;

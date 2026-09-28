@@ -25,6 +25,12 @@ export const SKIP = set("skip|never mind|nevermind|forget it|forget that|leave i
 export const EACH = ["one of each", "one of every kind", "one of everything", "all of them", "all of the above", "every kind"];
 const PRICE_WORDS = new Set(["price", "prices", "cost", "costs", "much", "expensive", "cheap", "dollars", "charge", "pricing"]);
 export function asksPrice(message: string): boolean { return normalize(message).split(" ").some((w) => PRICE_WORDS.has(w)); } // "how much is X" may carry a price; "what is X" does not
+const WAIT_WORDS = new Set(["wait", "eta", "long"]), THANKS_WORDS = new Set(["thanks", "thank", "thx", "ty", "appreciate", "appreciated"]), HAVE_LEAD = new Set(["do", "does", "have", "got", "can", "is", "are", "any", "yall"]);
+/** "how long is the wait", "whats the eta", "when will it be ready": a question about timing */
+export function asksWait(message: string): boolean { const w = words(message); return w.some((x) => WAIT_WORDS.has(x)) || (w.includes("when") && w.includes("ready")); }
+export function saysThanks(message: string): boolean { return words(message).some((w) => THANKS_WORDS.has(w)); }
+/** "do you have X?" wants "Yes, we do."; "what comes on X?" does not */
+export function asksHave(message: string): boolean { const w = words(message); return w.length > 0 && (HAVE_LEAD.has(w[0]) || (w.length > 1 && (w[0] === "yes" || w[0] === "ok" || w[0] === "wait") && HAVE_LEAD.has(w[1]))); }
 export const HELLO = set("hi|hello|hey|yo|hi there|hello there|good morning|good afternoon|good evening|hey there|sup|howdy|hola");
 
 const TIP_RE = /^\$?\s*(\d{1,4}(?:\.\d{1,2})?)\s*(%|percent|pct|dollars?|bucks|dollar tip|tip)?$/;

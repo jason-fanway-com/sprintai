@@ -38,6 +38,11 @@ export const T = {
   addressNotFound: (text: string) => `I couldn't find "${text}". Can you check it, or give a nearby cross street?`,
   addressOutOfZone: (text: string) => `${text} is outside our delivery area.`,
   droppedLine: (span: string) => `I'll leave "${span}" off for now.`,
+  addressReadAs: (text: string) => `I read that as ${text}. If that's not right, send the address again.`,
+  youreWelcome: () => `You're welcome!`,
+  gotIt: () => `Got it.`,
+  // the same wait the pay sentence promises, for "how long?" asked before or after the link
+  eta: (f: "pickup" | "delivery" | null) => f === null ? `Pickup orders are usually ready in about 10-15 minutes, delivery in about 30-45.` : f === "delivery" ? `About 30-45 min after you pay.` : `About 10-15 min after you pay.`,
   addressToPickup: () => `I'll set this up for pickup instead.`,
   tipZero: () => `No tip added.`,
   tipOutOfRange: () => `That tip amount doesn't look right.`,

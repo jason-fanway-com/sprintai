@@ -1,4 +1,4 @@
-import { asksPrice, EACH, isQuestion } from "./vocab.ts";
+import { asksPrice, asksHave, asksWait, saysThanks, EACH, isQuestion, LINK } from "./vocab.ts";
 // turn.ts — one conversational turn as a pure function.
 //   (form, menu, message, moves) -> (form', ledger, plan, reply)
 import { apply, normalizeMoveBatch, type LedgerEntry, type Line, type LineMatcher, type Move, type OpenQuestion, type OrderForm, type LineRef } from "./form.ts";
@@ -10,7 +10,7 @@ import { priceLine, totals, unitCents } from "./price.ts";
 import { render, type Ack, type Decline, type Info, type Question, type ReplyPlan } from "./render.ts";
 import type { Voice } from "./templates.ts";
 import { itemsInCategory } from "./menu.ts";
-import { contentWords, leadingCount, splitList, words, findWordRun, isWordSubset, sameWord, STOPWORDS, SIZE_WORDS, withoutCountry } from "./normalize.ts";
+import { contentWords, leadingCount, splitList, words, findWordRun, isWordSubset, sameWord, STOPWORDS, SIZE_WORDS, withoutCountry, normalize } from "./normalize.ts";
 
 export interface TurnInput {
   form: OrderForm;
@@ -36,7 +36,7 @@ export interface TurnOutput {
 }
 
 function isProgress(e: LedgerEntry): boolean {
-  if (e.event === "yes_no_without_question" || e.event === "answer_option_unmatched") return false;
+  if (e.event === "yes_no_without_question" || e.event === "answer_option_unmatched" || e.event === "talk" || e.event === "talk_rejected" || e.event === "ask_menu") return false; // a remark after the link changed nothing: no second pay sentence
   if (e.event === "control") { const w = (e.data as { what: string }).what; return w !== "unclear" && w !== "greeting"; }
   if (e.event === "answer") { const d = e.data as { accepted?: boolean }; return d.accepted !== false; }
   return true;
@@ -77,6 +77,8 @@ export function turn(input: TurnInput): TurnOutput {
     return { ...m, item_span: h.termWords.join(" "), option_spans: options };
   };
   const open = form0.open, focus = open && "line_id" in open ? form0.lines.find((l) => l.line_id === open.line_id) : undefined; let splitFocus = false;
+  // three unknown "grilled chicken sandwiches" and then three real names: one name per unknown line, in order; a fourth name is a new line, never a fourth answer to the first
+  const sameSpanUnresolved = focus?.status.kind === "unresolved" ? form0.lines.filter((l) => l.status.kind === "unresolved" && l.span === focus.span) : []; let replaced = 0;
   const focusRemoved = !!focus && batch.some((x) => x.kind === "remove_line" && ("line_id" in x.ref ? x.ref.line_id === focus.line_id : "span" in x.ref && lineMatchesSpan(focus, x.ref.span, menu)));
   // a rejected add whose item word was invented ("pizza") but whose option words, or the item span's own
   // verbatim words ("plain" out of "plain pizza"), answer the open line question keeps that answer
@@ -132,7 +134,8 @@ export function turn(input: TurnInput): TurnOutput {
     const keep: typeof rec.omissions = [];
     for (const om of rec.omissions) {
       // "yo i said chicken cheesesteak sandwich" against a list that missed it: a whole item name sharing a word with the line is the line, not a second order
-      const names = (focus.status.kind === "ambiguous" || focus.status.kind === "unresolved") && !batch.some((m) => m.kind === "add_line") && om.item_ids.length === 1 && !(focus.status.kind === "ambiguous" && focus.status.candidates.includes(om.item_ids[0])) && (focus.status.kind === "unresolved" || contentWords(om.span).some((w) => contentWords(focus.span).some((f) => sameWord(w, f)))); // an unknown word being explained ("glizzies" -> "that means hot dog") needs no shared word
+      const sameCategory = focus.status.kind === "ambiguous" && om.item_ids.length === 1 && (() => { const c = menu.items.get(om.item_ids[0])?.category; const cands = (focus.status as { candidates: string[] }).candidates; return !!c && cands.every((id) => menu.items.get(id)?.category === c); })(); // "the large gyro pizza" while we ask which pizza: the answer, whatever word the first mention used ("pie")
+      const names = (focus.status.kind === "ambiguous" || focus.status.kind === "unresolved") && !batch.some((m) => m.kind === "add_line") && om.item_ids.length === 1 && !(focus.status.kind === "ambiguous" && focus.status.candidates.includes(om.item_ids[0])) && (focus.status.kind === "unresolved" || sameCategory || contentWords(om.span).some((w) => contentWords(focus.span).some((f) => sameWord(w, f)))); // an unknown word being explained ("glizzies" -> "that means hot dog") needs no shared word
       if ((names || spanAnswersLine(focus, om.span, menu)) && !rec.accepted.some((m) => m.kind === "answer_option" && words(m.value_span).join(" ") === om.span)) {
         rec.accepted.push({ kind: "answer_option", value_span: om.span });
         ledger.push({ turn: t, event: names ? "mention_names_the_line" : "uncovered_word_answers_question", data: { span: om.span } });
@@ -157,7 +160,8 @@ export function turn(input: TurnInput): TurnOutput {
     }
     if (m.kind === "remove_line") { // "take one off" a line of three lowers it to two; the whole line goes only when nothing counts fewer
       const ref = m.ref, tgt = "line_id" in ref ? form0.lines.find((l) => l.line_id === ref.line_id) : "span" in ref ? form0.lines.find((l) => lineMatchesSpan(l, ref.span, menu)) : undefined, n = mw.map((w) => leadingCount(`${w} x`).count).find((c) => c !== null && c > 0);
-      if (tgt?.item_id && tgt.qty > 1 && n && n < tgt.qty && !batch.some((x) => x.kind === "add_line")) { moves.push({ kind: "change_line", ref: { line_id: tgt.line_id }, qty: tgt.qty - n, add_option_spans: [], remove_option_spans: [] }); ledger.push({ turn: t, event: "remove_some", data: { line_id: tgt.line_id, count: n } }); continue; }
+      const only = mw.includes("only"); // "i only want one": the count is the quantity wanted, not the number to take off
+      if (tgt?.item_id && tgt.qty > 1 && n && n < tgt.qty && !batch.some((x) => x.kind === "add_line")) { moves.push({ kind: "change_line", ref: { line_id: tgt.line_id }, qty: only ? n : tgt.qty - n, add_option_spans: [], remove_option_spans: [] }); ledger.push({ turn: t, event: only ? "keep_only" : "remove_some", data: { line_id: tgt.line_id, count: n } }); continue; }
     }
     if (m.kind === "answer_option" && m.line_id !== undefined) { // "white bread for both chicken parms" pointed at the cheesesteak: the words name the line
       const named = form0.lines.filter((l) => l.item_id && l.status.kind !== "complete" && contentWords(m.value_span).some((w) => menu.items.get(l.item_id!)!.words.some((iw) => sameWord(iw, w) || (w.length >= 4 && iw.startsWith(w)))));
@@ -172,13 +176,30 @@ export function turn(input: TurnInput): TurnOutput {
         continue;
       }
     }
+    // "turkey and sauteed pierogies" sent as one add: the whole names nothing, each part names something, so it is two adds
+    const andParts = m.kind === "add_line" && resolveSpan(m.item_span, menu).kind === "none" ? splitList(m.item_span).map((p) => leadingCount(p)).filter((p) => p.rest && contentWords(p.rest).length > 0) : [];
+    if (m.kind === "add_line" && andParts.length >= 2 && andParts.every((p) => resolveSpan(p.rest, menu).kind !== "none")) {
+      andParts.forEach((p, i) => moves.push({ kind: "add_line", item_span: p.rest, qty: p.count ?? (i === 0 ? m.qty : 1), option_spans: i === andParts.length - 1 ? m.option_spans : [] })); // the options follow the last thing named
+      ledger.push({ turn: t, event: "and_split", data: { span: m.item_span, parts: andParts.map((p) => p.rest) } }); continue;
+    }
+    // "medium" with no line question open: a value of a cart line's slot changes that slot; it is never an item search (and never a "couldn't find")
+    if (m.kind === "answer_option" && m.line_id === undefined && !focus) {
+      const slotOf = (l: Line) => l.item_id ? menu.items.get(l.item_id)!.groups.find((g) => g.kind === "slot" && matchChoice(m.value_span, g).kind === "one") : undefined, owners = form0.lines.filter((l) => slotOf(l));
+      if (owners.length === 1) {
+        const l = owners[0], g = slotOf(l)!, same = l.choices[g.id] === (matchChoice(m.value_span, g) as { choice_id: string }).choice_id;
+        if (!same) moves.push({ kind: "change_line", ref: { line_id: l.line_id }, add_option_spans: [m.value_span], remove_option_spans: [] });
+        ledger.push({ turn: t, event: same ? "answer_restates_choice" : "answer_changes_slot", data: { line_id: l.line_id, span: m.value_span } }); continue;
+      }
+    }
     // an "item" answering the line we asked about is an answer; one answering ANOTHER pending line's question ("boneless" while we ask about the garlic bread) is routed there
     const span = m.kind === "add_line" ? m.item_span : m.kind === "answer_option" ? m.value_span : null;
     if (span && focus && !(m.kind === "add_line" && focusRemoved)) { // "scratch that. 2 chicken parms and a cheesesteak": adds beside the removal are new lines, not answers to the line going away
       const replacesUnresolved = m.kind === "add_line" && focus.status.kind === "unresolved" && resolveSpan(span, menu).kind !== "none";
+      const pairTarget = replacesUnresolved ? sameSpanUnresolved[replaced] : undefined;
       const target = spanAnswersLine(focus, span, menu) ? focus
-        : form0.lines.find((l) => l.line_id !== focus.line_id && l.status.kind !== "complete" && spanAnswersLine(l, span, menu)) ?? (replacesUnresolved ? focus : undefined);
+        : form0.lines.find((l) => l.line_id !== focus.line_id && l.status.kind !== "complete" && spanAnswersLine(l, span, menu)) ?? pairTarget;
       if (target && (m.kind === "add_line" || target !== focus)) {
+        if (target === pairTarget) replaced++;
         const line_id = target === focus ? undefined : target.line_id;
         moves.push({ kind: "answer_option", value_span: span, line_id });
         if (m.kind === "add_line") for (const o of m.option_spans ?? []) moves.push({ kind: "answer_option", value_span: o, line_id });
@@ -210,30 +231,20 @@ export function turn(input: TurnInput): TurnOutput {
   // 2. a change_line that changes nothing is the model pointing at a line: beside an add in the same
   // batch ("actually pepperoni not cheese") that is a replacement; on its own it is nothing
   for (let i = moves.length - 1; i >= 0; i--) {
-    const m = moves[i];
-    if (m.kind !== "change_line" || m.qty != null || m.add_option_spans?.length || m.remove_option_spans?.length) continue;
+    const m = moves[i]; if (m.kind !== "change_line" || m.qty != null || m.add_option_spans?.length || m.remove_option_spans?.length) continue;
     const target = targetOf(m.ref);
-    if (target && moves.some((x) => x.kind === "add_line")) {
-      moves.splice(i, 1, { kind: "remove_line", ref: { line_id: target.line_id } });
-      ledger.push({ turn: t, event: "empty_change_beside_add_is_swap", data: { line_id: target.line_id } });
-    } else moves.splice(i, 1);
+    if (target && moves.some((x) => x.kind === "add_line")) { moves.splice(i, 1, { kind: "remove_line", ref: { line_id: target.line_id } }); ledger.push({ turn: t, event: "empty_change_beside_add_is_swap", data: { line_id: target.line_id } }); } else moves.splice(i, 1);
   }
 
   // 2a. "make the coke a diet": an option word that names a different item is a swap, not a note
   for (let i = 0; i < moves.length; i++) {
-    const m = moves[i];
-    if (m.kind !== "change_line" || !m.add_option_spans?.length) continue;
-    const target = targetOf(m.ref);
-    if (!target?.item_id) continue;
+    const m = moves[i]; if (m.kind !== "change_line" || !m.add_option_spans?.length) continue;
+    const target = targetOf(m.ref); if (!target?.item_id) continue;
     const cur = menu.items.get(target.item_id);
     for (const o of m.add_option_spans) {
-      const r = resolveSpan(`${o} ${cur?.display_name ?? target.span}`, menu);
-      if (r.kind === "item" && r.id !== target.item_id) {
-        moves.splice(i, 1, { kind: "remove_line", ref: { line_id: target.line_id } }, { kind: "add_line", item_span: menu.items.get(r.id)!.display_name, qty: m.qty ?? target.qty, option_spans: [] });
-        ledger.push({ turn: t, event: "option_names_other_item_swap", data: { from: target.item_id, to: r.id, option: o } });
-        i++;
-        break;
-      }
+      const r = resolveSpan(`${o} ${cur?.display_name ?? target.span}`, menu); if (r.kind !== "item" || r.id === target.item_id) continue;
+      moves.splice(i, 1, { kind: "remove_line", ref: { line_id: target.line_id } }, { kind: "add_line", item_span: menu.items.get(r.id)!.display_name, qty: m.qty ?? target.qty, option_spans: [] });
+      ledger.push({ turn: t, event: "option_names_other_item_swap", data: { from: target.item_id, to: r.id, option: o } }); i++; break;
     }
   }
 
@@ -252,6 +263,7 @@ export function turn(input: TurnInput): TurnOutput {
     if (a.item_id && a.status.kind === "complete" && b.status.kind === "complete" && same(a) === same(b)) { a.qty += b.qty; form.lines.splice(j, 1); res.touched.push(a.line_id); ledger.push({ turn: t, event: "lines_merged", data: { into: a.line_id, from: b.line_id } }); }
   }
   for (const l of form.lines) if (before.get(l.line_id) !== JSON.stringify(l) && !res.touched.includes(l.line_id)) res.touched.push(l.line_id);
+  for (const o of form.omissions) if (!o.declined && form.lines.some((l) => l.item_id && lineMatchesSpan(l, o.span, menu))) { o.declined = true; ledger.push({ turn: t, event: "omission_satisfied", data: { span: o.span } }); } // "want one?" about a turkey that just went on the order: asked and answered
 
   // 5. omissions: an item the second reader saw and the first did not act on. In a conversation-only message a lone uncounted word ("my house") is not an order; a multi-word name or a counted mention is.
   const remarkOnly = moves.length > 0 && moves.every((m) => m.kind === "talk" || m.kind === "ask_menu" || m.kind === "control"), strong = (om: { span: string; qty: number }) => om.qty > 1 || contentWords(om.span).length >= 2;
@@ -288,14 +300,12 @@ export function turn(input: TurnInput): TurnOutput {
   const stripNotes = (f: OrderForm) => JSON.stringify({ ...f, lines: f.lines.map((l) => ({ ...l, notes: [], held: [] })), open: null, asked: null, turn_no: 0 });
   const progress = res.ledger.some(isProgress) && stripNotes(form) !== stripNotes(input.form);
   // a remark, a menu question or a cart read-back is a conversation, not a customer who is stuck
-  const conversational = res.talk !== null || res.askMenu !== undefined || res.showCart;
+  const conversational = res.talk !== null || res.askMenu !== undefined || res.showCart || asksWait(input.message);
   let q: OpenQuestion | null = next(form, menu, res.refAsk);
   if (form.relink && q?.kind === "confirm") { form.confirmed = true; form.status = "awaiting_payment"; ledger.push({ turn: t, event: "relink_after_change" }); q = next(form, menu, res.refAsk); } // the customer already confirmed once; the change was theirs, so the updated order and the new link go out together
-  let key = questionKey(q);
-  let count = key !== null && key === form.asked.key && !progress ? (conversational ? form.asked.count : form.asked.count + 1) : 0;
+  let key = questionKey(q), count = key !== null && key === form.asked.key && !progress ? (conversational ? form.asked.count : form.asked.count + 1) : 0;
   form.open = q; form.asked = { key, count };
-  const declines: Decline[] = res.declines.map((d) => ({ code: d.code, span: d.span }));
-  const note = escalate(form, menu);
+  const declines: Decline[] = res.declines.map((d) => ({ code: d.code, span: d.span })), note = escalate(form, menu);
   if (note) {
     ledger.push({ turn: t, event: "escalated", data: note }); const [code, span] = note.split(":");
     if (code === "dropped_line" || code === "address_to_pickup" || code === "tip_zero") declines.push({ code, span: code === "dropped_line" ? span : undefined });
@@ -308,22 +318,19 @@ export function turn(input: TurnInput): TurnOutput {
   }
   if (q?.kind === "items" && form.items_done && !form.relink && form.lines.every((l) => l.status.kind !== "complete")) { form.items_done = false; form.confirmed = false; form.status = "open"; } // a swap after the link leaves one pending line: the order is still "done", and relinks once that line is whole
   if (q?.kind === "confirm") form.status = "confirming";
-  const remarkAfterLink = q === null && form.confirmed && form.status === "awaiting_payment" && !!input.checkoutUrl && res.talk !== null && !res.ledger.some(isProgress); // "thanks, on my way" after the link: the remark, not the link again (two segments each time)
-  const handoff = q === null && form.confirmed && form.status === "awaiting_payment" && !remarkAfterLink;
+  const wantsLink = LINK.has(normalize(input.message));
+  const afterLink = q === null && form.confirmed && form.status === "awaiting_payment" && !!input.checkoutUrl && !res.ledger.some(isProgress) && !wantsLink; // "thanks" or "how long?" after the link: the answer, never the pay sentence again (two segments each time); the link only when asked for
+  const handoff = q === null && form.confirmed && form.status === "awaiting_payment" && !afterLink;
 
   // 7. the plan
   const acks: Ack[] = [];
   for (const e of res.ledger) {
-    if (e.event === "answer") {
-      const d = e.data as { field: string; value?: unknown; accepted?: boolean };
-      if (d.field === "fulfillment") acks.push({ kind: "fulfillment", value: d.value as "pickup" | "delivery" });
-      if (d.field === "address" && form.address?.validated && form.address.zone_ok) acks.push({ kind: "address", text: withoutCountry(form.address.formatted ?? form.address.text) });
-      if (d.field === "tip" && d.accepted !== false && form.tip) acks.push({ kind: "tip", cents: totals(form, menu).tip_cents });
-    }
+    if (e.event !== "answer") continue; const d = e.data as { field: string; value?: unknown; accepted?: boolean }, addr = form.address?.validated && form.address.zone_ok ? withoutCountry(form.address.formatted ?? form.address.text) : null;
+    if (d.field === "fulfillment") acks.push({ kind: "fulfillment", value: d.value as "pickup" | "delivery" });
+    if (d.field === "address" && addr) { acks.push({ kind: "address", text: addr }); if (form.address!.read_as) declines.push({ code: "address_read_as", span: addr }); }
+    if (d.field === "tip" && d.accepted !== false && form.tip) acks.push({ kind: "tip", cents: totals(form, menu).tip_cents });
   }
-  const focusId = q && "line_id" in q ? q.line_id : null;
-  const newIds = new Set(res.ledger.filter((e) => e.event === "add_line").map((e) => (e.data as { line_id: number }).line_id));
-  const notes: string[] = [];
+  const focusId = q && "line_id" in q ? q.line_id : null, newIds = new Set(res.ledger.filter((e) => e.event === "add_line").map((e) => (e.data as { line_id: number }).line_id)), notes: string[] = [];
   for (const id of res.touched) {
     const l = form.lines.find((x) => x.line_id === id);
     if (!l) continue;
@@ -345,10 +352,15 @@ export function turn(input: TurnInput): TurnOutput {
   // a word we did not know that this turn became an item, by any path ("glizzies" answered, replaced, or removed beside "hot dog"), is learned: "oh, gotcha"
   const mergedInto = (id: number) => { const e = [...res.ledger, ...ledger].find((x) => x.event === "lines_merged" && (x.data as { from: number }).from === id); return e ? form.lines.find((l) => l.line_id === (e.data as { into: number }).into) : undefined; };
   const taught = new Set<string>(), fresh = [...new Set([...newIds].map((id) => (form.lines.find((l) => l.line_id === id) ?? mergedInto(id))?.item_id).filter((x): x is string => !!x))];
+  const learned = new Map<string, Set<string>>();
   for (const [id, json] of before) {
     const was = JSON.parse(json) as Line; if (was.item_id || was.status.kind !== "unresolved") continue;
     const item = form.lines.find((l) => l.line_id === id)?.item_id ?? mergedInto(id)?.item_id ?? (fresh.length === 1 && res.removed.some((r) => r.line_id === id) ? fresh[0] : null);
-    if (item) { taught.add(was.span); ledger.push({ turn: t, event: "taught_term", data: { span: was.span, item_id: item } }); }
+    if (item) (learned.get(was.span) ?? learned.set(was.span, new Set()).get(was.span)!).add(item);
+  }
+  for (const [span, items] of learned) { // one word, one item: three "grilled chicken sandwiches" that became three different things taught nothing; "hot honey pie" that became one size of a three-size pizza is not the word's meaning
+    const it = menu.items.get([...items][0])!, sized = !!it.facets.size && [...menu.items.values()].some((x) => x.id !== it.id && x.category === it.category && x.facets.kind === it.facets.kind && x.facets.size !== it.facets.size), ok = items.size === 1 && !sized;
+    if (ok) taught.add(span); ledger.push({ turn: t, event: ok ? "taught_term" : "taught_term_skipped", data: ok ? { span, item_id: it.id } : { span, reason: items.size > 1 ? "several_items" : "sized_row" } });
   }
   if (taught.size) { acks.push({ kind: "gotcha" }); res.talk = null; } // "oh, gotcha" is the whole reaction; the model's "no problem, got it" would double it
   for (const r of res.removed) { const it = r.item_id ? menu.items.get(r.item_id) : null; if (it) acks.push({ kind: "line_removed", name: it.display_name }); else if (!taught.has(r.span)) declines.push({ code: "dropped_line", span: r.span }); }
@@ -359,13 +371,15 @@ export function turn(input: TurnInput): TurnOutput {
   if (cartAnswer) info = cartAnswer;
   const aboutFocus = (about: string) => { const r = resolveSpan(about, menu), fid = focus?.item_id; return r.kind === "none" || (!!fid && (r.kind === "item" ? r.id === fid : r.ids.includes(fid))); }; // "what flavors u got?", "what wings do you have?" while we ask the wings' flavor: the flavors
   if (res.askMenu !== undefined) info = res.askMenu === null && input.form.open?.kind === "line_ambiguous" ? null : (res.askMenu === null || (input.form.open?.kind === "line_slot" && aboutFocus(res.askMenu))) && input.form.open && "line_id" in input.form.open ? questionOptions(input.form, menu) : menuInfo(res.askMenu, menu, asksPrice(input.message));
-  if (info?.kind === "item" && isQuestion(input.message)) info = { ...info, answer: true }; // "Yes, we do."
+  if (info?.kind === "item") info = { ...info, answer: asksHave(input.message), in_cart: form.lines.some((l) => l.item_id === (info as { item: { id: string } }).item.id && l.status.kind === "complete") }; // "do you have X?" gets "Yes, we do."; "what comes on X?" does not; an item already ordered is not offered its choices again
+  if (asksWait(input.message) && !info) info = { kind: "eta" }; // "how long is the wait?": the same promise the pay sentence makes
   if (res.control?.what === "human") info = { kind: "human" };
   if (res.control?.what === "cancel") info = { kind: "cancelled" };
   if (res.control?.what === "start_over") info = { kind: "started_over" };
   const askedSomethingNew = q !== null && questionKey(q) !== questionKey(input.form.open);
-  if (res.control?.what === "unclear" && !progress && !askedSomethingNew && !res.talk) info = info ?? { kind: "unclear" }; // an answer we found ourselves ("yes, 1 × Hot Dog is on your order") beats the model's shrug
+  if (res.control?.what === "unclear" && !progress && !askedSomethingNew && !res.talk && !afterLink) info = info ?? { kind: "unclear" }; // an answer we found ourselves ("yes, 1 × Hot Dog is on your order") beats the model's shrug
   if (moves.length === 0 && rec.rejected.length === 0 && !progress && count > 0) info = info ?? { kind: "unclear" };
+  if (afterLink && !info && !res.talk) info = saysThanks(input.message) ? { kind: "welcome" } : isQuestion(input.message) ? { kind: "human" } : { kind: "got_it" }; // after the link, a reply always says something, and never the pay sentence
 
   let question: Question | null = null;
   if (form.status === "abandoned") question = null;
@@ -385,38 +399,22 @@ export function turn(input: TurnInput): TurnOutput {
 }
 
 function menuInfo(about: string | null, menu: Menu, price: boolean): Info {
-  if (about) {
-    const r = resolveSpan(about, menu);
-    if (r.kind === "item") {
-      const item = menu.items.get(r.id)!;
-      const fake = { line_id: 0, span: about, item_id: item.id, qty: 1, choices: {}, modifiers: [], held: [], notes: [], slot_candidates: {}, status: { kind: "complete" as const } };
-      return { kind: "item", item, unit_cents: unitCents(fake, item), price };
-    }
-    if (r.kind === "ambiguous") {
-      const its = r.ids.map((id) => menu.items.get(id)!);
-      const kinds = new Set(its.map((i) => i.facets.kind ?? i.display_name));
-      if (kinds.size === 1 && its.every((i) => i.facets.size)) { // one pizza in three sizes: describe it once, list the sizes
-        const first = its.find((i) => i.description) ?? its[0];
-        return { kind: "item", item: first, unit_cents: first.base_cents, sizes: its.map((i) => ({ name: i.facets.size!, cents: i.base_cents })), price };
-      }
-      return { kind: "list", names: its.map((i) => i.display_name) };
-    }
-    const cat = itemsInCategory(menu, about);
-    if (cat.length) return { kind: "list", names: cat.map((i) => i.display_name) };
-    return { kind: "not_found", about };
+  if (!about) return { kind: "categories", names: [...new Set([...menu.items.values()].filter((i) => i.orderable && i.category).map((i) => i.category!))].slice(0, 12) };
+  const r = resolveSpan(about, menu);
+  if (r.kind === "item") { const item = menu.items.get(r.id)!; return { kind: "item", item, unit_cents: unitCents({ line_id: 0, span: about, item_id: item.id, qty: 1, choices: {}, modifiers: [], held: [], notes: [], slot_candidates: {}, status: { kind: "complete" as const } }, item), price }; }
+  if (r.kind === "ambiguous") {
+    const its = r.ids.map((id) => menu.items.get(id)!), kinds = new Set(its.map((i) => i.facets.kind ?? i.display_name));
+    if (kinds.size === 1 && its.every((i) => i.facets.size)) { const first = its.find((i) => i.description) ?? its[0]; return { kind: "item", item: first, unit_cents: first.base_cents, sizes: its.map((i) => ({ name: i.facets.size!, cents: i.base_cents })), price }; } // one pizza in three sizes: describe it once, list the sizes
+    return { kind: "list", names: its.map((i) => i.display_name) };
   }
-  const cats = [...new Set([...menu.items.values()].filter((i) => i.orderable && i.category).map((i) => i.category!))];
-  return { kind: "categories", names: cats.slice(0, 12) };
+  const cat = itemsInCategory(menu, about);
+  return cat.length ? { kind: "list", names: cat.map((i) => i.display_name) } : { kind: "not_found", about };
 }
 
 /** "what are the options?" while a line question is open lists that question's choices. */
 function questionOptions(form: OrderForm, menu: Menu): Info {
-  const open = form.open!;
-  const l = "line_id" in open ? form.lines.find((x) => x.line_id === open.line_id) : undefined;
-  if (!l) return menuInfo(null, menu, false);
-  if (l.status.kind === "ambiguous") return { kind: "list", names: l.status.candidates.map((id) => menu.items.get(id)?.display_name ?? id) };
-  const item = l.item_id ? menu.items.get(l.item_id) : null;
-  if (item && l.status.kind === "needs_slot") { const g = item.groups.find((x) => x.id === (l.status as { group_id: string }).group_id); if (g) return { kind: "list", names: g.choices.map((c) => c.name) }; }
-  if (item?.bundle) return { kind: "list", names: item.bundle.choices.map((c) => c.name) };
-  return menuInfo(null, menu, false);
+  const open = form.open!, l = "line_id" in open ? form.lines.find((x) => x.line_id === open.line_id) : undefined, item = l?.item_id ? menu.items.get(l.item_id) : null;
+  if (l?.status.kind === "ambiguous") return { kind: "list", names: l.status.candidates.map((id) => menu.items.get(id)?.display_name ?? id) };
+  const g = item && l?.status.kind === "needs_slot" ? item.groups.find((x) => x.id === (l.status as { group_id: string }).group_id) : undefined;
+  return g ? { kind: "list", names: g.choices.map((c) => c.name) } : item?.bundle ? { kind: "list", names: item.bundle.choices.map((c) => c.name) } : menuInfo(null, menu, false);
 }

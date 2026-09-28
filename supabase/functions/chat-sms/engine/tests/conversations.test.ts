@@ -10,6 +10,7 @@ import { narrow } from "../resolve.ts";
 import { closedAnswer } from "../vocab.ts";
 import { totals } from "../price.ts";
 import { words, closestWord, faithfulRewrite } from "../normalize.ts";
+import { streetChanged } from "../address.ts";
 
 const menu = fixtureMenu();
 const addr = (text: string) => ({ kind: "answer", field: "address", value: { text, formatted: text, validated: true, zone_ok: true } } as Move);
@@ -1502,3 +1503,130 @@ Deno.test("SMS cost: every reply is plain GSM-7 text (one stray character double
   for (const r of replies) for (const c of r) assert(GSM.has(c), `non-GSM character ${JSON.stringify(c)} in: ${r}`);
 });
 
+
+// ── pass 11 (2026-09-27, 40 conversations): the six approved fixes, each on the shape that failed ──
+
+Deno.test("pass 11 A: three unknown lines and then three real names pair up one each; a fourth name is a new line; nothing is taught", () => {
+  let f = newForm("vitos", "test-v1");
+  let o = say(f, "3 signature sandwiches. one bacon cheeseburger, one swiss burger, one big boy burger", [
+    { kind: "add_line", item_span: "signature sandwiches", qty: 1, option_spans: ["bacon cheeseburger"] },
+    { kind: "add_line", item_span: "signature sandwiches", qty: 1, option_spans: ["swiss burger"] },
+    { kind: "add_line", item_span: "signature sandwiches", qty: 1, option_spans: ["big boy burger"] },
+  ]);
+  f = o.form; assertEquals(f.lines.length, 3); assertEquals(f.open?.kind, "line_unresolved");
+  o = say(f, "my bad. one bacon cheeseburger, one swiss burger, one big boy burger, and garlic knots", [
+    { kind: "add_line", item_span: "bacon cheeseburger", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "swiss burger", qty: 1, option_spans: [] },
+    { kind: "add_line", item_span: "big boy burger", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] },
+  ]);
+  f = o.form;
+  assertEquals(f.lines.map((l) => l.item_id), [IDS.baconCheeseburger, "swb", "bbb", IDS.knots], o.reply); // #34 put all four names on line 1 and left lines 2 and 3 unknown
+  assert(!o.ledger.some((e) => e.event === "taught_term"), "one word that became three things teaches nothing");
+  assert(o.ledger.some((e) => e.event === "taught_term_skipped"));
+  // the burgers each want a temp; "medium well" fills the one we asked about, not a fresh line, and the next burger is asked next
+  assertEquals(f.open?.kind, "line_slot");
+  o = say(f, "medium well"); f = o.form;
+  assertEquals(f.lines.length, 4); assertEquals(f.lines[0].choices[IDS.tempGroup], IDS.tempMedWell); assertEquals((f.open as { line_id: number }).line_id, 2);
+});
+
+Deno.test("pass 11 A: 'i only want one' sets the count; 'take one off' lowers it", () => {
+  let f = newForm("vitos", "test-v1");
+  let o = say(f, "pickup"); f = o.form;
+  o = say(f, "4 garlic knots", [{ kind: "add_line", item_span: "garlic knots", qty: 4, option_spans: [] }]); f = o.form;
+  o = say(f, "wait no. i only want one garlic knots not four", [{ kind: "remove_line", ref: { span: "garlic knots" } }, { kind: "remove_line", ref: { span: "garlic knots" } }, { kind: "remove_line", ref: { span: "garlic knots" } }]); f = o.form;
+  assertEquals(f.lines[0].qty, 1, o.reply);
+  o = say(f, "make it 3", [{ kind: "change_line", ref: { span: "garlic knots" }, qty: 3 }]); f = o.form;
+  o = say(f, "take one off", [{ kind: "remove_line", ref: { span: "garlic knots" } }]); f = o.form;
+  assertEquals(f.lines[0].qty, 2, o.reply);
+});
+
+Deno.test("pass 11 B: a slot value with no line question changes that slot or restates it; it is never an item search; an unknown line is dropped after the ladder", () => {
+  let f = newForm("vitos", "test-v1");
+  let o = say(f, "pickup"); f = o.form;
+  o = say(f, "a cheeseburger", [{ kind: "add_line", item_span: "cheeseburger", qty: 1, option_spans: [] }]); f = o.form;
+  o = say(f, "medium well"); f = o.form; assertEquals(f.lines[0].choices[IDS.tempGroup], IDS.tempMedWell); assertEquals(f.open?.kind, "items");
+  o = say(f, "what comes on the cheeseburger", [{ kind: "ask_menu", about_span: "cheeseburger" }]); f = o.form;
+  assert(!o.reply.includes("Yes, we do."), o.reply); assert(!o.reply.includes("Well Done"), o.reply); // an item already ordered is not offered its choices again
+  o = say(f, "medium well is good. thats all", [{ kind: "answer_option", value_span: "medium well" }, { kind: "answer", field: "items_done", value: true }]); f = o.form;
+  assertEquals(f.lines.length, 1, o.reply); assert(!o.reply.includes("couldn't find"), o.reply); assertEquals(f.open?.kind, "confirm"); // #21: "couldn't find medium well" five times, no link
+  o = say(f, "actually make it medium", [{ kind: "answer_option", value_span: "medium" }]); f = o.form;
+  assertEquals(f.lines.length, 1); assertEquals(f.lines[0].choices[IDS.tempGroup], IDS.tempMedium, o.reply); assertStringIncludes(o.reply, "Updated");
+  // the floor: an unknown word asked once, once more with SKIP offered, then left off
+  o = say(f, "and a glorb", [{ kind: "add_line", item_span: "glorb", qty: 1, option_spans: [] }]); f = o.form; assertStringIncludes(o.reply, "couldn't find \"glorb\"");
+  o = say(f, "the zorp kind", [{ kind: "answer_option", value_span: "zorp kind" }]); f = o.form; assertStringIncludes(o.reply, "Still nothing for \"glorb\"");
+  o = say(f, "zorp", [{ kind: "answer_option", value_span: "zorp" }]); f = o.form; assertStringIncludes(o.reply, "SKIP");
+  o = say(f, "zorp!!", [{ kind: "answer_option", value_span: "zorp" }]); f = o.form;
+  assertStringIncludes(o.reply, "I'll leave \"glorb\" off"); assertEquals(f.lines.length, 1); assertEquals(f.open?.kind, "confirm");
+});
+
+Deno.test("pass 11 C: while we ask which pizza, a pizza named outright is the answer, whatever word the first mention used", () => {
+  let f = newForm("vitos", "test-v1");
+  let o = say(f, "a large pie", [{ kind: "add_line", item_span: "pie", qty: 1, option_spans: ["large"] }]); f = o.form;
+  assertEquals(f.open?.kind, "line_ambiguous");
+  o = say(f, "the large hawaiian pizza", []); f = o.form; // #32: the model sent nothing and the engine said "not one we have", then "did you also want" later
+  assertEquals(f.lines.length, 1); assertEquals(f.lines[0].item_id, "hawL", o.reply); assert(!o.reply.includes("didn't catch"), o.reply);
+  assertEquals(f.omissions.filter((x) => !x.declined).length, 0);
+});
+
+Deno.test("pass 11 D: a list of flavors keeps every flavor it names; a whole flavor name is that flavor, not the longer one containing it", () => {
+  let f = newForm("vitos", "test-v1");
+  let o = say(f, "pickup"); f = o.form;
+  o = say(f, "10 bone in wings", [{ kind: "add_line", item_span: "bone in wings", qty: 10, option_spans: [] }]); f = o.form;
+  assertEquals(f.open?.kind, "line_slot"); assertEquals(f.lines[0].qty, 1);
+  o = say(f, "bbq, garlic hot, honey garlic bbq, hot"); f = o.form;
+  assertEquals(f.lines[0].slot_candidates["wingFl"]?.length, 4, o.reply); // #39: BBQ and Hot fell out of the shortlist because longer names contain them
+  o = say(f, "just give me bbq", [{ kind: "answer_option", value_span: "bbq" }]); f = o.form;
+  assertEquals(f.lines[0].choices["wingFl"], "flBBQ", o.reply); assertStringIncludes(o.reply, "(BBQ)");
+});
+
+Deno.test("pass 11 E: a directional the geocoder dropped is read back and can be corrected; a matching street is not", () => {
+  assert(streetChanged("2222 w union st allentown", "2222 Union St, Allentown, PA 18104, USA"));
+  assert(!streetChanged("3300 hamilton blvd", "3300 Hamilton Blvd, Allentown, PA 18104, USA"));
+  assert(!streetChanged("5620 Cetronia Rd Allentown pa 18106", "5620 Cetronia Rd, Allentown, PA 18106, USA"));
+  assert(streetChanged("221 main st", "212 Main St, Allentown, PA 18104, USA")); // a house number that moved is a different house
+  let f = newForm("vitos", "test-v1");
+  let o = say(f, "delivery"); f = o.form;
+  o = say(f, "2222 w union st", [{ kind: "answer", field: "address", value: { text: "2222 w union st", formatted: "2222 Union St, Allentown, PA 18104, USA", validated: true, zone_ok: true, read_as: true } }]); f = o.form;
+  assertStringIncludes(o.reply, "Delivery to 2222 Union St, Allentown, PA 18104."); assertStringIncludes(o.reply, "I read that as 2222 Union St, Allentown, PA 18104. If that's not right, send the address again.");
+  o = say(f, "2222 west union st", [{ kind: "answer", field: "address", value: { text: "2222 west union st", formatted: "2222 W Union St, Allentown, PA 18104, USA", validated: true, zone_ok: true } }]); f = o.form;
+  assert(!o.reply.includes("I read that as"), o.reply); assertStringIncludes(o.reply, "2222 W Union St");
+});
+
+Deno.test("pass 11 F: after the link a thank-you gets 'You're welcome!', a wait question gets the time, a question we cannot answer gets the shop's number, and only asking for the link gets the link", () => {
+  let f = newForm("vitos", "test-v1");
+  const go = (msg: string, moves: Move[] = []) => { const o = say(f, msg, moves); f = o.form; return o; };
+  go("pickup"); go("garlic knots", [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }]);
+  let o = go("how long does it usually take", []); assertStringIncludes(o.reply, "About 10-15 min after you pay."); assertStringIncludes(o.reply, "Anything else?");
+  go("thats it"); o = go("yes"); assert(o.handoff);
+  f.checkout_url = "https://pay.example/o/abc"; // the runner sets these once the session exists
+  const after = (msg: string, moves: Move[] = []) => turn({ form: f, menu, message: msg, moves: closedAnswer(f, msg, menu) ?? moves, closed: closedAnswer(f, msg, menu) !== null, checkoutUrl: f.checkout_url });
+  o = after("sounds good thanks"); assertEquals(o.reply, "You're welcome!"); assert(!o.handoff); f = o.form;
+  o = after("cool how long is the wait usually, pretty hungry rn"); assertEquals(o.reply, "About 10-15 min after you pay."); assert(!o.handoff); f = o.form;
+  o = after("do you take cash?"); assertStringIncludes(o.reply, "reach the shop"); assert(!o.handoff); f = o.form;
+  o = after("sick"); assertEquals(o.reply, "Got it."); f = o.form;
+  o = after("send the link again"); assert(o.handoff, o.reply); assertStringIncludes(o.reply, "Pay here: https://pay.example/o/abc"); f = o.form;
+  o = after("thanks man appreciate it", [{ kind: "talk", text: "Anytime, enjoy!" }]); assertEquals(o.reply, "Anytime, enjoy!"); assert(!o.handoff);
+});
+
+Deno.test("pass 11 #9: 'turkey and garlic knots' sent as one add is two adds; 'remove number 2' takes the second line; a pick number is never a kitchen note", () => {
+  let f = newForm("vitos", "test-v1");
+  let o = say(f, "pickup"); f = o.form;
+  o = say(f, "lemme get a turkey and garlic knots", [{ kind: "add_line", item_span: "turkey and garlic knots", qty: 1, option_spans: [] }]); f = o.form;
+  assertEquals(f.lines.map((l) => l.item_id), ["tky", IDS.knots], o.reply); assert(o.ledger.some((e) => e.event === "and_split"));
+  o = say(f, "remove number 2", [{ kind: "remove_line", ref: { span: "number 2" } }]); f = o.form;
+  assertEquals(f.lines.map((l) => l.item_id), ["tky"], o.reply); assertStringIncludes(o.reply, "Removed Garlic Knots (6).");
+  o = say(f, "some fries", [{ kind: "add_line", item_span: "fries", qty: 1, option_spans: [] }]); f = o.form; assertEquals(f.open?.kind, "line_ambiguous");
+  o = say(f, "crazy fries number 1", [{ kind: "answer_option", value_span: "crazy fries number 1" }]); f = o.form;
+  assertEquals(f.lines[1].item_id, "crz", o.reply); assertEquals(f.lines[1].notes, []); assert(!o.reply.includes("Noted"), o.reply);
+});
+
+Deno.test("pass 11 #9: an offer ('want one?') is dropped once the item is on the order by any path; a sized row is never taught as a word's meaning", () => {
+  let f = newForm("vitos", "test-v1");
+  let o = say(f, "pickup"); f = o.form;
+  o = say(f, "a cheeseburger", [{ kind: "add_line", item_span: "cheeseburger", qty: 1, option_spans: [] }]); f = o.form; assertEquals(f.open?.kind, "line_slot");
+  o = say(f, "do you have turkey?", [{ kind: "ask_menu", about_span: "turkey" }]); f = o.form; assert(f.omissions.some((x) => x.span === "turkey" && x.offer && !x.declined));
+  o = say(f, "medium, and a turkey too", [{ kind: "answer_option", value_span: "medium" }, { kind: "add_line", item_span: "turkey", qty: 1, option_spans: [] }]); f = o.form;
+  assert(!o.reply.includes("Want one?"), o.reply); assertEquals(f.lines.filter((l) => l.item_id === "tky").length, 1); assertEquals(f.open?.kind, "items");
+  o = say(f, "and a sicilian special", [{ kind: "add_line", item_span: "sicilian special", qty: 1, option_spans: [] }]); f = o.form; assertEquals(f.open?.kind, "line_unresolved");
+  o = say(f, "i mean the large pepperoni pizza", [{ kind: "add_line", item_span: "large pepperoni pizza", qty: 1, option_spans: [] }]); f = o.form;
+  assertEquals(f.lines[2].item_id, IDS.pepPizzaL, o.reply); assert(!o.ledger.some((e) => e.event === "taught_term"), "a three-size pizza's large row is not what 'sicilian special' means");
+});

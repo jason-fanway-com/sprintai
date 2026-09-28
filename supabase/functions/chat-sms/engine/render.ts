@@ -10,10 +10,11 @@ export type Ack =
   | { kind: "address"; text: string } | { kind: "tip"; cents: number } | { kind: "noted"; notes: string[] } | { kind: "line_progress"; name: string; picks: string[] }
   | { kind: "pending"; items: Array<{ qty: number; span: string }> } | { kind: "gotcha" };
 
-export type Decline = { code: DeclineCode | "dropped_line" | "address_to_pickup" | "tip_zero" | "checkout_failed"; span?: string };
+export type Decline = { code: DeclineCode | "dropped_line" | "address_to_pickup" | "tip_zero" | "checkout_failed" | "address_read_as"; span?: string };
 
 export type Info =
-  | { kind: "cart"; totals: Totals } | { kind: "item"; item: MenuItem; unit_cents: number; sizes?: Array<{ name: string; cents: number }>; price: boolean; answer?: boolean }
+  | { kind: "cart"; totals: Totals } | { kind: "item"; item: MenuItem; unit_cents: number; sizes?: Array<{ name: string; cents: number }>; price: boolean; answer?: boolean; in_cart?: boolean }
+  | { kind: "eta" } | { kind: "welcome" } | { kind: "got_it" }
   | { kind: "cart_has"; qty: number; name: string } | { kind: "cart_lacks"; name: string }
   | { kind: "list"; names: string[] } | { kind: "categories"; names: string[] } | { kind: "not_found"; about: string }
   | { kind: "human" } | { kind: "cancelled" } | { kind: "started_over" } | { kind: "unclear" };
@@ -144,7 +145,7 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
 
   const declineText: Partial<Record<Decline["code"], (span?: string) => string>> = {
     no_such_line: (sp) => T.noSuchLine(sp), nothing_to_remove: () => T.nothingToRemove(), address_not_found: (sp) => T.addressNotFound(sp ?? ""), address_out_of_zone: (sp) => T.addressOutOfZone(sp ?? "That address"),
-    dropped_line: (sp) => T.droppedLine(sp ?? ""), address_to_pickup: () => T.addressToPickup(), tip_zero: () => T.tipZero(), tip_out_of_range: () => T.tipOutOfRange(), checkout_failed: () => T.checkoutFailed(),
+    dropped_line: (sp) => T.droppedLine(sp ?? ""), address_to_pickup: () => T.addressToPickup(), tip_zero: () => T.tipZero(), tip_out_of_range: () => T.tipOutOfRange(), checkout_failed: () => T.checkoutFailed(), address_read_as: (sp) => T.addressReadAs(sp ?? ""),
   };
   for (const d of plan.declines) { const f = declineText[d.code]; if (f) parts.push(f(d.span)); }
 
@@ -154,12 +155,15 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
       if (i.totals.lines.length === 0) parts.push(T.cartEmpty());
       else parts.push([T.cartHeader(), ...receiptRows(i.totals).map((r, k) => `${k + 1}) ${r}`), moneyLine(i.totals)].join("\n"));
     } else if (i.kind === "item") {
-      const opts = i.item.groups.filter((g) => g.kind === "slot").map((g) => `${title(g.name)}: ${g.choices.map((c) => c.name).slice(0, 6).join(", ")}`);
+      const opts = i.in_cart ? [] : i.item.groups.filter((g) => g.kind === "slot").map((g) => `${title(g.name)}: ${g.choices.map((c) => c.name).slice(0, 6).join(", ")}`); // an item already on the order: its choices were made, do not list them again
       const sizes = i.sizes ? sortSizes(i.sizes.map((x) => x.name)) : null;
       const money = !i.price ? null : sizes ? sizes.map((n) => `${title(n)} ${dollars(i.sizes!.find((x) => x.name === n)!.cents)}`).join(", ") : dollars(i.unit_cents);
       if (sizes && !i.price) opts.unshift(`Sizes: ${sizes.map(title).join(", ")}`);
       parts.push((i.answer ? T.yesWeHave() + " " : "") + T.itemInfo(sizes ? title(i.item.facets.kind ?? i.item.display_name) : i.item.display_name, money, opts, i.item.description));
-    } else if (i.kind === "cart_has") parts.push(T.cartHas(i.qty, i.name));
+    } else if (i.kind === "eta") parts.push(T.eta(form.fulfillment));
+    else if (i.kind === "welcome") parts.push(T.youreWelcome());
+    else if (i.kind === "got_it") parts.push(T.gotIt());
+    else if (i.kind === "cart_has") parts.push(T.cartHas(i.qty, i.name));
     else if (i.kind === "cart_lacks") { parts.push(T.cartLacks(i.name));
     } else if (i.kind === "list") parts.push(T.listInfo(i.names)); // the template caps long lists and says how many more
     else if (i.kind === "categories") parts.push(T.menuCategories(i.names));
