@@ -53,7 +53,8 @@ def canary(addr):
         # an edit after the link: old session expired, form reopened, new readback
         # an edit after the link: old session expired, a fresh one created, the updated order and new link in one message (2026-09-26)
         ("actually add garlic knots too", lambda c, r: expect(len(lines(c)) == 2, f"lines {names(c)}") + expect(bool(c["stripe_checkout_session_id"]), "no new checkout session") + expect("earlier link won't work" in r and "Pay here" in r, f"expected updated order + new link: {r!r}") + expect(c["subtotal_cents"] == 849 + 599, f"subtotal {c['subtotal_cents']}")),
-        ("thanks", lambda c, r: expect("Pay here" in r, f"expected the link re-sent: {r!r}")),
+        ("thanks", lambda c, r: expect("Pay here" not in r and len(r.strip()) > 0, f"expected a thank-you reply without the pay sentence (v665): {r!r}") + expect(bool(c["stripe_checkout_session_id"]), "session lost after a thank-you")),
+        ("send the link again", lambda c, r: expect("Pay here" in r, f"expected the link re-sent on request: {r!r}")),
     ]
 
 def delivery3(addr):
