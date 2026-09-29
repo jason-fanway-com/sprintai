@@ -35,14 +35,26 @@ const API_BASE = "https://api.uber.com";
  * Reads config from env. Test and production are separate credential sets:
  *   test: UBER_DIRECT_CUSTOMER_ID / UBER_DIRECT_CLIENT_ID / UBER_DIRECT_CLIENT_SECRET
  *   live: UBER_DIRECT_LIVE_CUSTOMER_ID / UBER_DIRECT_LIVE_CLIENT_ID / UBER_DIRECT_LIVE_CLIENT_SECRET
- * UBER_DIRECT_WEBHOOK_SECRET is shared (one webhook endpoint per org). null when anything is missing.
+ * Webhook signing keys differ per environment: UBER_DIRECT_WEBHOOK_SECRET (test), UBER_DIRECT_WEBHOOK_SECRET_LIVE.
+ * null when any client credential is missing.
  */
 export function uberConfigFromEnv(test: boolean): UberConfig | null {
   const p = test ? "UBER_DIRECT_" : "UBER_DIRECT_LIVE_";
   const get = (k: string) => (Deno.env.get(k) ?? "").trim();
   const customer_id = get(`${p}CUSTOMER_ID`), client_id = get(`${p}CLIENT_ID`), client_secret = get(`${p}CLIENT_SECRET`);
   if (!customer_id || !client_id || !client_secret) return null;
-  return { customer_id, client_id, client_secret, webhook_secret: get("UBER_DIRECT_WEBHOOK_SECRET") || null, robo: test };
+  return { customer_id, client_id, client_secret, webhook_secret: get(test ? "UBER_DIRECT_WEBHOOK_SECRET" : "UBER_DIRECT_WEBHOOK_SECRET_LIVE") || null, robo: test };
+}
+
+/**
+ * Signature checkers for the webhook, one per configured signing key (live first). They need only the key,
+ * not client credentials: a live webhook must verify even before live client credentials are set.
+ */
+export function uberWebhookVerifiers(): DeliveryProvider[] {
+  return ["UBER_DIRECT_WEBHOOK_SECRET_LIVE", "UBER_DIRECT_WEBHOOK_SECRET"]
+    .map((k) => (Deno.env.get(k) ?? "").trim())
+    .filter(Boolean)
+    .map((webhook_secret) => makeUberProvider({ customer_id: "", client_id: "", client_secret: "", webhook_secret, robo: false }));
 }
 
 // ─── status mapping ────────────────────────────────────────────────────────

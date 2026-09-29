@@ -127,3 +127,22 @@ Deno.test("fake provider: quote, create, cancel before pickup is free, after pic
   p.advance(b.delivery_id, "picked_up");
   assertEquals(await p.cancel(b.delivery_id), { ok: true, fee_cents: 800 });
 });
+
+Deno.test("webhook verifiers: test and live signing keys each verify their own events, live first", async () => {
+  const keep = { t: Deno.env.get("UBER_DIRECT_WEBHOOK_SECRET"), l: Deno.env.get("UBER_DIRECT_WEBHOOK_SECRET_LIVE") };
+  Deno.env.set("UBER_DIRECT_WEBHOOK_SECRET", "test-key"); Deno.env.set("UBER_DIRECT_WEBHOOK_SECRET_LIVE", "live-key");
+  try {
+    const { uberWebhookVerifiers } = await import("./uber.ts");
+    const vs = uberWebhookVerifiers();
+    assertEquals(vs.length, 2);
+    const body = JSON.stringify({ kind: "event.delivery_status", delivery_id: "del_9", status: "delivered", created: "t" });
+    for (const [key, okIdx] of [["test-key", 1], ["live-key", 0]] as const) {
+      const sig = await _hmacHex(key, body);
+      const res = await Promise.all(vs.map((v) => v.verifyWebhook(new Request("https://x", { method: "POST", body, headers: { "x-uber-signature": sig } }))));
+      assertEquals(res.map((r) => r.ok), [okIdx === 0, okIdx === 1], key);
+    }
+  } finally {
+    if (keep.t === undefined) Deno.env.delete("UBER_DIRECT_WEBHOOK_SECRET"); else Deno.env.set("UBER_DIRECT_WEBHOOK_SECRET", keep.t);
+    if (keep.l === undefined) Deno.env.delete("UBER_DIRECT_WEBHOOK_SECRET_LIVE"); else Deno.env.set("UBER_DIRECT_WEBHOOK_SECRET_LIVE", keep.l);
+  }
+});

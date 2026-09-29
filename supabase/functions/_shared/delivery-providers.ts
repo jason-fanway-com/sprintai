@@ -1,7 +1,7 @@
 // _shared/delivery-providers.ts — name → provider. The only file that knows every adapter.
 // test=true picks the provider's sandbox credentials (carts with test_mode=true).
 import type { DeliveryProvider, DeliveryProviderName } from "./delivery.ts";
-import { makeUberProvider, uberConfigFromEnv } from "./uber.ts";
+import { makeUberProvider, uberConfigFromEnv, uberWebhookVerifiers } from "./uber.ts";
 import { doordashConfigFromEnv, makeDoorDashProvider } from "./doordash.ts";
 
 type Factory = (test: boolean) => DeliveryProvider | null;
@@ -22,6 +22,7 @@ export function providerFor(name: string | null | undefined, test: boolean): Del
  * before its signature is checked (DoorDash signs each with its own secret), so the webhook tries each.
  */
 export function providersForWebhook(name: string): DeliveryProvider[] {
+  if (name === "uber") return uberWebhookVerifiers(); // Uber: one signing key per environment, no client credentials needed
   return [providerFor(name, false), providerFor(name, true)].filter((p): p is DeliveryProvider => p !== null);
 }
 
