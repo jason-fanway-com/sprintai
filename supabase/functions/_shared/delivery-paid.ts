@@ -3,7 +3,7 @@
 // succeeded, so a booking failure is recorded (deliveries.error + a sev_1 issue) for a human to act on,
 // and the kitchen ticket says the courier is not booked.
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
-import type { DeliveryProvider, Place } from "./delivery.ts";
+import { e164OrNull, type DeliveryProvider, type Place } from "./delivery.ts";
 import { isCourierProvider } from "./delivery-providers.ts";
 import { bookDelivery, type BookResult } from "./delivery-store.ts";
 
@@ -51,8 +51,10 @@ export async function bookCourierForPaidCart(
   if (!dropAddr || !shop.formatted_address) return fail("no_address", !dropAddr ? "the cart has no delivery address" : "the shop has no formatted_address");
 
   const { data: conv } = await db.from("conversations").select("customer_phone").eq("id", cart.conversation_id).maybeSingle();
-  const customerPhone = (conv as { customer_phone: string | null } | null)?.customer_phone ?? null;
-  const pickupPhone = shop.courier_pickup_phone ?? shop.phone_number_e164;
+  const pickupPhone = e164OrNull(shop.courier_pickup_phone) ?? e164OrNull(shop.phone_number_e164);
+  // a web test conversation has no phone ("web:<session>"): in test mode the courier gets the shop's number instead
+  const rawPhone = (conv as { customer_phone: string | null } | null)?.customer_phone ?? null;
+  const customerPhone = e164OrNull(rawPhone) ?? (test ? pickupPhone : null);
   if (!customerPhone || !pickupPhone) return fail("no_address", !customerPhone ? "no customer phone on the conversation" : "the shop has no pickup phone");
 
   const pickup: Place = { name: shop.name, address: shop.formatted_address, lat: shop.latitude, lng: shop.longitude, phone: pickupPhone, notes: shop.courier_pickup_notes };

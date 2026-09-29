@@ -54,3 +54,15 @@ Deno.test("courier_pickup_phone wins over the shop's number; a replayed payment 
   assertEquals(p.calls.filter((c) => c.op === "create").length, 1);
   assertEquals((p.calls.find((c) => c.op === "create")!.req as CreateRequest).pickup.phone, "+14845550111");
 });
+
+Deno.test("a web test conversation (no phone) books with the shop's number as the drop-off phone; a live one without a phone raises an issue", async () => {
+  const db = seed(); db.tables("conversations")[0].customer_phone = "web:6f1c";
+  const p = makeFakeProvider();
+  const r = await bookCourierForPaidCart(db.client, "cart_1", () => p, NOW);
+  assert(r.booked);
+  assertEquals((p.calls.find((c) => c.op === "create")!.req as CreateRequest).dropoff.phone, "+14845550100");
+  const live = seed({ cart: { test_mode: false } }); live.tables("conversations")[0].customer_phone = "web:6f1c";
+  const r2 = await bookCourierForPaidCart(live.client, "cart_1", () => makeFakeProvider(), NOW);
+  assert(!r2.booked);
+  assertEquals(live.tables("issues").length, 1);
+});

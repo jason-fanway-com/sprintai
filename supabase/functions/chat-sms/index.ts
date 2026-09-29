@@ -39,7 +39,7 @@ import { googleGeocoder, localityOf } from "./engine/address.ts";
 import { createCheckoutSession, buildEngineCheckoutSessionInput, appendCheckoutLink, type CheckoutLineItemInput } from "./checkout-session.ts";
 import { deliveryForCart, type DeliveryRow } from "../_shared/delivery-store.ts";
 import { providerFor } from "../_shared/delivery-providers.ts";
-import { isQuoteError } from "../_shared/delivery.ts";
+import { e164OrNull, isQuoteError } from "../_shared/delivery.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -2475,7 +2475,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
           try {
             const q = await p.quote({
               pickup: { name: shop.name, address: courierShop.formatted_address, lat: shop.latitude, lng: shop.longitude, phone: courierShop.courier_pickup_phone ?? shop.phone_number_e164 ?? "", notes: null },
-              dropoff: { name: "Customer", address: req.formatted, lat: null, lng: null, phone: customerPhone ?? "", notes: null },
+              dropoff: { name: "Customer", address: req.formatted, lat: null, lng: null, phone: e164OrNull(customerPhone) ?? "", notes: null },
               order_value_cents: req.order_value_cents, external_id: req.cart_id,
             });
             return isQuoteError(q) ? { ok: false, code: q.code, error: q.error } : { ok: true, fee_cents: q.fee_cents, quote_id: q.quote_id };

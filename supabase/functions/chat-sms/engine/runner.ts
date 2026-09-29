@@ -201,6 +201,7 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
   // 2. addresses are validated by I/O before the pure turn sees them; a courier shop also prices the address
   // (a courier that will not go there is the same decline as outside the radius)
   const courier = !!deps.quoteDelivery && !!input.shop.delivery_provider && input.shop.delivery_provider !== "own";
+  const quoteRefusals: Array<{ code: string; error: string }> = []; // kept in the ledger: the customer only hears "outside our delivery area"
   const quoteFor = async (formatted: string) => deps.quoteDelivery!({ formatted, order_value_cents: totals(form0, menu).subtotal_cents, cart_id: input.cart.id, test: input.cart.test_mode });
   for (let i = 0; i < moves.length; i++) {
     const m = moves[i];
@@ -209,7 +210,7 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
       if (courier && value.validated && value.zone_ok) {
         const q = await quoteFor(value.formatted ?? value.text);
         value = q.ok ? { ...value, delivery_quote_cents: q.fee_cents, delivery_quote_id: q.quote_id } : { ...value, zone_ok: false };
-        if (!q.ok) console.warn(`[engine] courier quote refused cart=${input.cart.id.slice(0, 8)} code=${q.code} ${q.error}`);
+        if (!q.ok) { console.warn(`[engine] courier quote refused cart=${input.cart.id.slice(0, 8)} code=${q.code} ${q.error}`); quoteRefusals.push({ code: q.code, error: q.error.slice(0, 300) }); }
       }
       moves[i] = { kind: "answer", field: "address", value };
     }
@@ -230,6 +231,7 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
     else console.warn("[engine] judge failed", j.reason, j.detail);
   }
   const form = out.form;
+  for (const r of quoteRefusals) out.ledger.push({ turn: form.turn_no, event: "courier_quote_refused", data: r });
   let reply = out.reply;
 
   // 4. checkout: expire a stale session on reopen; create one on handoff

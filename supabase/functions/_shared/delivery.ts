@@ -120,6 +120,11 @@ export interface DeliveryProvider {
   verifyWebhook(req: Request): Promise<{ ok: boolean; event: WebhookEvent | null }>;
 }
 
+/** providers take E.164 only; a web test conversation's "web:<session>" is not a phone number */
+export function e164OrNull(p: string | null | undefined): string | null {
+  return p && /^\+[1-9]\d{9,14}$/.test(p) ? p : null;
+}
+
 export function isQuoteError(q: DeliveryQuote | QuoteError): q is QuoteError {
   return (q as QuoteError).error !== undefined;
 }

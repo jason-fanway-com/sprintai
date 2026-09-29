@@ -15,7 +15,8 @@ const { chromium } = require(PW);
     if (!/test mode|TEST MODE|testmode|"livemode":false/i.test(body)) throw new Error("not a Stripe test-mode page; refusing to pay");
     const fill = async (sel, v) => { const el = page.locator(sel).first(); if (await el.count()) await el.fill(v); };
     await fill("#email", "e2e-test@orderfare.example");
-    const cardTab = page.locator('[data-testid="card-accordion-item-button"]'); if (await cardTab.count()) await cardTab.first().click();
+    const cardTab = page.locator('[data-testid="card-accordion-item-button"]'); // collapsed card section only; an open one hides its button
+    if (!(await page.locator("#cardNumber").isVisible().catch(() => false)) && await cardTab.count() && await cardTab.first().isVisible()) await cardTab.first().click();
     await page.locator("#cardNumber").waitFor({ timeout: 30000 });
     await fill("#cardNumber", "4242 4242 4242 4242");
     await fill("#cardExpiry", "12 / 34");
