@@ -51,6 +51,9 @@ verify_jwt = false  # Called internally: onboarding-save's fire-and-forget kickP
 [functions.stripe-webhook]
 verify_jwt = false  # Stripe webhooks don't send JWT
 
+[functions.delivery-webhook]
+verify_jwt = false  # Uber/DoorDash webhooks carry their own signature, not a Supabase JWT
+
 [functions.create-checkout]
 verify_jwt = false  # Called from public signup page
 
