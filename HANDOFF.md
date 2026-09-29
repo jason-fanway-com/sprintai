@@ -1,6 +1,6 @@
 # SprintAI — Handoff
 
-Last updated: 2026-09-27
+Last updated: 2026-09-29
 
 What an incoming engineer needs to understand this system and start contributing
 within a day. Not a reference — a map.
@@ -1662,6 +1662,23 @@ job has fired even once. Whoever picks this up next should check `cron.job_run_d
 `proof-scheduled-trigger` and look for a `test_runs` row with `trigger_type='scheduled-regression'`
 before assuming this is live — a committed migration is not the same as an applied one on this
 project (see the migrations-105–111 gap earlier in `RUNBOOK.md`).
+
+## Open: the live site advertises $1.49/order, Stripe still charges $0.99 (found 2026-09-29)
+
+On `main` today, three customer-facing pages say the per-order fee is **$1.49**:
+`how-it-works.html`, `checkout/index.html`, and `why-orderfare.html` (all changed 2026-09-26,
+commit `a2b82e6b`). But the code that actually creates the Stripe charge,
+`SERVICE_FEE_CENTS` in `supabase/functions/_shared/connect.ts`, is still **99** — unchanged on
+`main`. A customer reading the site is told $1.49; the order they place is charged $0.99.
+
+The $1.49 constant does exist in the repo — on branch `engine/clean-sheet`
+(commit `61e3665e`, also 2026-09-26, "fee: $1.49 flat per order (Jason, 2026-09-26)") — but that
+branch is a separate in-progress engine rewrite not merged to `main`, so it isn't what's live.
+
+This wasn't caught by the 2026-09-27 doc sync (`ea2ee019`) because it only checked that the new
+page was documented, not that its numbers matched the deployed charge code. Someone needs to
+either merge the $1.49 fee change to `main` or roll the marketing copy back to $0.99 — until
+one of those happens, the advertised price and the charged price disagree on the live site.
 
 ## Quickstart for development
 
