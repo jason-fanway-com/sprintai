@@ -1,0 +1,18 @@
+{
+  "external_delivery_id": "cart-123-mg4k2p1a",
+  "currency": "USD",
+  "delivery_status": "quote",
+  "fee": 700,
+  "pickup_address": "1 Main St, Allentown, PA 18104, USA",
+  "pickup_business_name": "Vito's Pizza",
+  "pickup_phone_number": "+16105550100",
+  "dropoff_address": "5620 Cetronia Rd, Allentown, PA 18106, USA",
+  "dropoff_phone_number": "+16105550199",
+  "order_value": 3250,
+  "pickup_time_estimated": "2026-09-29T19:20:00Z",
+  "dropoff_time_estimated": "2026-09-29T19:38:00Z",
+  "support_reference": "1343593",
+  "tracking_url": "https://doordash.com/drive/portal/track/71c7a4b9-7ab9-4d3e-8b3c-000000000001",
+  "contactless_dropoff": false,
+  "tip": 0
+}

@@ -1,0 +1,14 @@
+{
+  "external_delivery_id": "cart-123-mg4k2p1a",
+  "currency": "USD",
+  "delivery_status": "picked_up",
+  "fee": 700,
+  "tip": 300,
+  "dasher_id": 1234567,
+  "dasher_name": "Sam",
+  "dasher_dropoff_phone_number": "+16505555555",
+  "dasher_location": { "lat": 40.60, "lng": -75.52 },
+  "pickup_time_actual": "2026-09-29T19:22:10Z",
+  "dropoff_time_estimated": "2026-09-29T19:38:00Z",
+  "tracking_url": "https://doordash.com/drive/portal/track/71c7a4b9-7ab9-4d3e-8b3c-000000000001"
+}

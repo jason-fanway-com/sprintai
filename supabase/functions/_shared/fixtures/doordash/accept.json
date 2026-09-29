@@ -1,0 +1,12 @@
+{
+  "external_delivery_id": "cart-123-mg4k2p1a",
+  "currency": "USD",
+  "delivery_status": "created",
+  "fee": 700,
+  "tip": 300,
+  "order_value": 3250,
+  "pickup_time_estimated": "2026-09-29T19:20:00Z",
+  "dropoff_time_estimated": "2026-09-29T19:38:00Z",
+  "support_reference": "1343593",
+  "tracking_url": "https://doordash.com/drive/portal/track/71c7a4b9-7ab9-4d3e-8b3c-000000000001"
+}

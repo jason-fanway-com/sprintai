@@ -1,0 +1,10 @@
+{
+  "event_name": "DASHER_CONFIRMED",
+  "created_at": "2026-09-29T19:12:03.000000Z",
+  "external_delivery_id": "cart-123-mg4k2p1a",
+  "dasher_id": 1234567,
+  "dasher_name": "Sam",
+  "dasher_dropoff_phone_number": "+16505555555",
+  "delivery_status": "confirmed",
+  "tracking_url": "https://doordash.com/drive/portal/track/71c7a4b9-7ab9-4d3e-8b3c-000000000001"
+}
