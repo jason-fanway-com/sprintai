@@ -10,9 +10,10 @@
 -- shop by the PO.
 --
 -- shops.prep_minutes: the pickup-ready time handed to the courier.
+-- shops.courier_pickup_phone / courier_pickup_notes: what the courier sees at pickup.
 -- order_carts.delivery_status: mirror of deliveries.status for the admin list.
 --
--- ADDITIVE ONLY. Reversible (drop the table and the three columns).
+-- ADDITIVE ONLY. Reversible (drop the table and the five columns).
 
 ALTER TABLE shops
   ADD COLUMN IF NOT EXISTS delivery_provider TEXT NOT NULL DEFAULT 'own'
@@ -25,6 +26,14 @@ ALTER TABLE shops
     CHECK (prep_minutes BETWEEN 0 AND 240);
 COMMENT ON COLUMN shops.prep_minutes IS
   'Minutes from payment until the food is ready; the courier pickup time.';
+
+ALTER TABLE shops
+  ADD COLUMN IF NOT EXISTS courier_pickup_phone TEXT,
+  ADD COLUMN IF NOT EXISTS courier_pickup_notes TEXT;
+COMMENT ON COLUMN shops.courier_pickup_phone IS
+  'E.164 the courier calls at pickup; falls back to phone_number_e164.';
+COMMENT ON COLUMN shops.courier_pickup_notes IS
+  'Where the courier picks up ("counter by the door, ask for the delivery shelf").';
 
 ALTER TABLE order_carts
   ADD COLUMN IF NOT EXISTS delivery_status TEXT;

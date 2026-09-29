@@ -37,6 +37,7 @@ import { runEngineTurn as runCleanEngineTurn } from "./engine/runner.ts";
 import type { OrderForm as EngineOrderForm } from "./engine/form.ts";
 import { googleGeocoder, localityOf } from "./engine/address.ts";
 import { createCheckoutSession, buildEngineCheckoutSessionInput, appendCheckoutLink, type CheckoutLineItemInput } from "./checkout-session.ts";
+import { deliveryForCart, type DeliveryRow } from "../_shared/delivery-store.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1195,6 +1196,9 @@ export async function handleSystemEvent(
     .single();
 
   if (!cartRow) return jsonError("Cart not found", 404);
+  // courier delivery (Uber Direct / DoorDash Drive), booked by stripe-webhook before this receipt; null for own-driver shops
+  const courier: DeliveryRow | null = system_event === "payment_confirmed" && cartRow.order_type === "delivery"
+    ? await deliveryForCart(supabase, order_cart_id).catch(() => null) : null;
   const shop = cartRow.shops as Shop;
 
   const { data: conversation } = await supabase
@@ -1246,8 +1250,9 @@ export async function handleSystemEvent(
     // Fulfilment wording must follow the order, not assume pickup: a delivery
     // order previously read "come pick it up", sending the customer to the shop
     // for food that was on its way to them (observed live, orders #11/#12).
+    // a booked courier: the tracking link is the only delivery update the customer gets (no third text)
     const readyPart = cartRow.order_type === "delivery"
-      ? "On its way in about 30-45 min"
+      ? (courier?.tracking_url ? `A courier is booked. Track it here: ${courier.tracking_url}` : "On its way in about 30-45 min")
       : `Ready for pickup in about 10-15 min${closePart}`;
     message = `Payment confirmed!${orderNum}Order${pickup}: ${items}. Total: $${total}. ${readyPart}.`;
   } else if (system_event === "payment_expired") {
@@ -1398,6 +1403,9 @@ export async function handleSystemEvent(
           ? `<p style="margin:0 0 6px;"><strong>Delivery Address:</strong> ${h(emailDeliveryFormatted)}</p>`
           : `<p style="margin:0 0 6px;"><strong>Pickup Name:</strong> ${h(emailPickup)}</p>`}
         ${emailNotes ? `<p style="margin:0 0 6px;"><strong>Prep Notes:</strong> ${h(emailNotes)}</p>` : ""}
+        ${courier ? (courier.delivery_id
+          ? `<p style="margin:0 0 6px;"><strong>Courier:</strong> ${h(courier.provider === "uber" ? "Uber" : "DoorDash")} pickup about ${h(new Date(courier.pickup_ready_at ?? Date.now()).toLocaleTimeString("en-US", { timeZone: shop.timezone || "America/New_York", hour: "numeric", minute: "2-digit" }))}${courier.courier_name ? `, ${h(courier.courier_name)}` : ""}${courier.tracking_url ? ` (<a href="${h(courier.tracking_url)}">track</a>)` : ""}</p>`
+          : `<p style="margin:0 0 6px;color:#b91c1c;"><strong>Courier NOT booked.</strong> Deliver it yourself or call OrderFare.</p>`) : ""}
         <p style="margin:0;"><strong>Time Received:</strong> ${etTime}</p>
       </div>
     </div>

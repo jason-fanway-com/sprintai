@@ -22,6 +22,8 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import { makeStripe, connectedAccountOpts } from "../_shared/connect.ts";
+import { cancelDeliveryForCart, type CancelOutcome } from "../_shared/delivery-store.ts";
+import { providerFor } from "../_shared/delivery-providers.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -106,6 +108,16 @@ Deno.serve(async (req: Request) => {
       })
       .eq("id", order_cart_id);
 
+    // A full refund calls the courier off when one is booked and it is still cancellable. A courier who
+    // already has the food makes it a return, which the provider bills (OrderFare's cost in the pilot).
+    // A partial refund (a missing item) leaves the delivery alone.
+    let courier: CancelOutcome | null = null;
+    if (refundStatus === "full") {
+      try { courier = await cancelDeliveryForCart(supabase, order_cart_id, providerFor); }
+      catch (e) { console.error(`[refund-order] courier cancel failed for cart ${order_cart_id}:`, e); }
+      if (courier && !courier.cancelled && courier.reason !== "no_delivery") console.warn(`[refund-order] courier not cancelled for cart ${order_cart_id}: ${JSON.stringify(courier)}`);
+    }
+
     console.log(`[refund-order] ${refundStatus} refund ${refund.id} on cart ${order_cart_id} acct ${connectedAccountId}: $${((refund.amount ?? 0) / 100).toFixed(2)}${isFull ? " (+$0.99 app fee returned)" : " ($0.99 kept)"}`);
 
     return jsonResponse({
@@ -113,6 +125,7 @@ Deno.serve(async (req: Request) => {
       amount_cents: refund.amount,
       refund_status: refundStatus,
       application_fee_refunded: isFull,
+      ...(courier ? { courier } : {}),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

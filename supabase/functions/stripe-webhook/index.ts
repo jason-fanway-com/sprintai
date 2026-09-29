@@ -11,6 +11,8 @@ import Stripe from "https://esm.sh/stripe@14.21.0?target=deno";
 import { deriveConnectStatus } from "../_shared/connect.ts";
 import { guardedSend } from "../_shared/outbound-guard.ts";
 import { upsertCustomerProfile } from "../_shared/customer-profile.ts";
+import { bookCourierForPaidCart } from "../_shared/delivery-paid.ts";
+import { providerFor } from "../_shared/delivery-providers.ts";
 
 const PLAN_PRICES: Record<string, string> = {
   // Map Stripe price IDs to plan names — update with real Stripe price IDs
@@ -453,6 +455,13 @@ async function handleOrderPaymentComplete(
   // action (they completed checkout and paid) — a consented, expected
   // transactional message. This and order_refunded are the ONLY two
   // customer-facing pushes allowed.
+  // Courier delivery (Uber Direct / DoorDash Drive): book BEFORE the receipt so the receipt and the
+  // kitchen ticket carry the tracking link. Never throws; a failure raises a sev_1 issue.
+  if (cart && cart.order_type === "delivery") {
+    const booked = await bookCourierForPaidCart(supabase, cartId, providerFor);
+    console.log(`[stripe-webhook] courier for cart ${cartId}: ${JSON.stringify(booked)}`);
+  }
+
   if (cart?.conversation_id) {
     await triggerChatSmsSystemEvent(cart.shop_id, cart.conversation_id, cartId, "payment_confirmed");
   }
