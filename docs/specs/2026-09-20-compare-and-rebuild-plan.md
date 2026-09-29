@@ -606,3 +606,14 @@ pizza already ordered in another size no longer lists sizes or offers one; the g
 hours/closing questions ignored, "which one?" floods (Greek pizza → 8 of 78 plus a 16-item dump), the "Got the X too. One
 question about it next." paragraphs, "one of each" on a single multi-flavor item, "Yes, we do" on what's-in questions,
 item names as kitchen notes ("ranch" ordered as a side), "sub" and "2 liter" vocabulary, the Fish Sandwich temp slot.
+
+### 2026-09-29, Uber Direct delivery (branch delivery/uber-direct, not deployed)
+Built steps 1–5 of the Uber Direct handoff on its own branch off engine/clean-sheet: the shared delivery contract
+(`_shared/delivery.ts`, DoorDash builds against the same one), the Uber adapter with a test fake, a quote probe script,
+migration 148 (deliveries table, `shops.delivery_provider` default "own", `prep_minutes` 20, courier pickup phone/notes,
+`order_carts.delivery_status`; checked on a scratch Postgres, not applied), `delivery-webhook` (one function, provider by
+path, signature checked, status only moves forward), booking on payment in `stripe-webhook` before the receipt so the
+receipt carries the tracking link (no third text), cancel on a full refund, and the engine hook: the quote rides on the
+address, replaces the flat fee, is re-quoted right before the link (a moved fee goes out with the new total). Own-driver
+shops are unchanged. 584 tests pass; core 1,990 + files = 2,000/2,000 (net zero lines). Not verified against Uber's real
+sandbox yet: the credentials live only in Supabase secrets, so the probe and the end-to-end need a deploy or a local copy.
