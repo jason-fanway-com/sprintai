@@ -133,3 +133,9 @@
   from = "/chat/*"
   to = "/chat/index.html"
   status = 200
+
+# 2026-09-29 (Jason): cost-comparison page taken down while the DoorDash Drive application is under review
+[[redirects]]
+  from = "/why-orderfare*"
+  to = "/"
+  status = 302
