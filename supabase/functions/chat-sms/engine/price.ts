@@ -31,7 +31,7 @@ export function priceLine(line: Line, menu: Menu): PricedLine | null {
 export function totals(form: OrderForm, menu: Menu): Totals {
   const lines = form.lines.map((l) => priceLine(l, menu)).filter((x): x is PricedLine => x !== null);
   const subtotal_cents = lines.reduce((s, l) => s + l.total_cents, 0);
-  const delivery_fee_cents = form.fulfillment === "delivery" ? menu.shop.delivery_fee_cents : 0;
+  const delivery_fee_cents = form.fulfillment === "delivery" ? (form.address?.delivery_quote_cents ?? menu.shop.delivery_fee_cents) : 0; // a courier quote replaces the flat fee
   const service_fee_cents = lines.length > 0 ? menu.shop.service_fee_cents : 0;
   const tax_cents = Math.round((subtotal_cents * menu.shop.tax_rate_bps) / 10000);
   const tip_cents = !form.tip ? 0 : form.tip.kind === "percent" ? Math.round((subtotal_cents * form.tip.value) / 100) : form.tip.value;

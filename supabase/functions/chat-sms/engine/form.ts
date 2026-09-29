@@ -10,8 +10,8 @@ export interface Address {
   formatted: string | null;
   validated: boolean;
   zone_ok: boolean;
-  /** the geocoder read the street differently from what was typed ("w union st" -> "Union St"): say so, take a correction */
-  read_as?: boolean;
+  /** read_as: the geocoder read the street differently from what was typed ("w union st" -> "Union St"): say so, take a correction. delivery_quote_*: a courier shop's quote for this address (runner); a new address carries its own */
+  read_as?: boolean; delivery_quote_cents?: number; delivery_quote_id?: string;
 }
 
 export type Tip = { kind: "percent"; value: number } | { kind: "cents"; value: number };
@@ -221,7 +221,7 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: LineMatc
           if (said && hadZip && said !== hadZip && value.validated && value.formatted === had) { value = { ...value, formatted: had!.replace(hadZip, said) }; ledger.push({ turn: t, event: "address_zip_corrected_by_customer", data: { from: hadZip, to: said } }); } // "its 18103 not 18104": their ZIP, our street
           const ok = value.validated && value.zone_ok;
           if (!value.validated) declines.push({ code: "address_not_found", span: value.text }); else if (!value.zone_ok) declines.push({ code: "address_out_of_zone", span: value.text });
-          form.address = { ...value }; if (ok && form.fulfillment === null) form.fulfillment = "delivery";
+          if (ok && value.delivery_quote_cents !== form.address?.delivery_quote_cents) reopenIfConfirmed(); form.address = { ...value }; if (ok && form.fulfillment === null) form.fulfillment = "delivery"; // a courier fee moving with the address changes the total
           ledger.push({ turn: t, event: "answer", data: { field: "address", value: value, accepted: ok } });
         } else if (m.field === "tip") {
           const v = m.value, bad = (v.kind === "percent" && (v.value < 0 || v.value > 100)) || (v.kind === "cents" && (v.value < 0 || v.value > 50000));

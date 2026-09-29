@@ -38,6 +38,8 @@ import type { OrderForm as EngineOrderForm } from "./engine/form.ts";
 import { googleGeocoder, localityOf } from "./engine/address.ts";
 import { createCheckoutSession, buildEngineCheckoutSessionInput, appendCheckoutLink, type CheckoutLineItemInput } from "./checkout-session.ts";
 import { deliveryForCart, type DeliveryRow } from "../_shared/delivery-store.ts";
+import { providerFor } from "../_shared/delivery-providers.ts";
+import { isQuoteError } from "../_shared/delivery.ts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -2451,9 +2453,10 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     const engineModel = Deno.env.get("ENGINE_MODEL") ?? "claude-haiku-4-5";
     const engineProvider = (Deno.env.get("ENGINE_PROVIDER") ?? "anthropic") as "anthropic" | "openrouter";
     const engineKey = engineProvider === "anthropic" ? (Deno.env.get("ANTHROPIC_API_KEY") ?? "") : (Deno.env.get("OPENROUTER_API_KEY") ?? "");
+    const courierShop = shop as { delivery_provider?: string | null; formatted_address?: string | null; courier_pickup_phone?: string | null };
     const engineOut = await runCleanEngineTurn(
       {
-        shop: { id: shop.id, tenant_id: shop.tenant_id, name: shop.name, delivery_enabled: shop.delivery_enabled === true, delivery_fee_cents: shop.delivery_fee_cents, tax_rate_bps: shop.tax_rate_bps ?? 0, phone_number_e164: shop.phone_number_e164, latitude: shop.latitude, longitude: shop.longitude, delivery_radius_mi: shop.delivery_radius_mi },
+        shop: { id: shop.id, tenant_id: shop.tenant_id, name: shop.name, delivery_enabled: shop.delivery_enabled === true, delivery_fee_cents: shop.delivery_fee_cents, tax_rate_bps: shop.tax_rate_bps ?? 0, phone_number_e164: shop.phone_number_e164, latitude: shop.latitude, longitude: shop.longitude, delivery_radius_mi: shop.delivery_radius_mi, delivery_provider: courierShop.delivery_provider ?? "own" },
         conversationId: conversation.id as string,
         cart: { id: cart.id, engine_form: cart.engine_form ?? null, test_mode: cart.test_mode, stripe_checkout_session_id: cart.stripe_checkout_session_id, notes: cart.notes },
         message: userMessage,
@@ -2465,6 +2468,19 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         model: { provider: engineProvider, model: engineModel, apiKey: engineKey, timeoutMs: 20000 },
         geocoder: googleGeocoder(Deno.env.get("GOOGLE_MAPS_API_KEY") ?? "", { lat: shop.latitude, lng: shop.longitude, radius_mi: shop.delivery_radius_mi, ...localityOf((shop as { formatted_address?: string | null }).formatted_address) }),
         serviceFeeCents: SERVICE_FEE_CENTS,
+        // courier shops (migration 148): the provider prices each address; the shop's own fee otherwise
+        quoteDelivery: async (req) => {
+          const p = providerFor(courierShop.delivery_provider, req.test);
+          if (!p || !courierShop.formatted_address) return { ok: false, code: "provider", error: !p ? `${courierShop.delivery_provider} credentials not configured` : "shop has no formatted_address" };
+          try {
+            const q = await p.quote({
+              pickup: { name: shop.name, address: courierShop.formatted_address, lat: shop.latitude, lng: shop.longitude, phone: courierShop.courier_pickup_phone ?? shop.phone_number_e164 ?? "", notes: null },
+              dropoff: { name: "Customer", address: req.formatted, lat: null, lng: null, phone: customerPhone ?? "", notes: null },
+              order_value_cents: req.order_value_cents, external_id: req.cart_id,
+            });
+            return isQuoteError(q) ? { ok: false, code: q.code, error: q.error } : { ok: true, fee_cents: q.fee_cents, quote_id: q.quote_id };
+          } catch (e) { return { ok: false, code: "unavailable", error: e instanceof Error ? e.message : String(e) }; }
+        },
         createCheckout: async (req) => {
           const key = req.testMode ? (getTestModeStripeKey() ?? "") : (Deno.env.get("STRIPE_SECRET_KEY") ?? "");
           if (!key) return { ok: false, error: "payment system not configured" };

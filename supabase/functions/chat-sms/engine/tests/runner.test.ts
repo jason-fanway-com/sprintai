@@ -253,3 +253,65 @@ Deno.test("runner: a change after the pay link expires the old session, creates 
   assertEquals(out.form.status, "awaiting_payment");
 });
 
+
+// ─── courier delivery (Uber Direct / DoorDash Drive): the quote is the delivery fee ───────────────
+const courierShop = { ...shop, id: "vitos-courier", delivery_fee_cents: 300, delivery_provider: "uber" }; // own ids: the menu cache is per shop and holds the flat fee
+const courierMoves = (m: string): Move[] =>
+  m === "delivery" ? [{ kind: "answer", field: "fulfillment", value: "delivery" }]
+  : /main st/.test(m) ? [{ kind: "answer", field: "address", value: { text: m, formatted: null, validated: false, zone_ok: false } }]
+  : m === "garlic knots" ? [{ kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }] : [];
+async function courierOrder(fees: Array<number | "refuse">, script = ["delivery", "12 main st", "garlic knots", "thats it", "no tip", "yes"]) {
+  const db = new FakeDb(); const d = deps(db, courierMoves);
+  const quotes: Array<{ formatted: string; test: boolean }> = [];
+  d.quoteDelivery = (req) => {
+    quotes.push({ formatted: req.formatted, test: req.test });
+    const f = fees[Math.min(quotes.length - 1, fees.length - 1)];
+    return Promise.resolve(f === "refuse" ? { ok: false as const, code: "out_of_range" as const, error: "too far" } : { ok: true as const, fee_cents: f, quote_id: `q${quotes.length}` });
+  };
+  const base = { shop: courierShop, conversationId: "c1", lastBotMessage: null, isFirstContact: false, cart: { id: "cart1", engine_form: null, stripe_checkout_session_id: null, test_mode: true, notes: null } } as Parameters<typeof runEngineTurn>[0];
+  const replies: string[] = [];
+  let out = await runEngineTurn({ ...base, message: script[0] }, d); replies.push(out.reply);
+  for (const m of script.slice(1)) { out = await runEngineTurn({ ...base, message: m, cart: { ...base.cart, engine_form: out.form, stripe_checkout_session_id: out.form.checkout_session_id } }, d); replies.push(out.reply); }
+  return { out, replies, quotes, created: d.created as Array<{ deliveryFeeCents: number; orderType: string }> };
+}
+
+Deno.test("runner: a courier shop prices the address with a quote, reads it back, and re-quotes before the link", async () => {
+  const r = await courierOrder([725, 725]);
+  assertEquals(r.quotes.length, 2, "once at the address, once before the link");
+  assertEquals(r.quotes[0], { formatted: "12 main st, Allentown, PA", test: true });
+  assert(r.replies.some((x) => x.includes("Delivery $7.25")), r.replies.join("\n---\n"));
+  assertEquals(r.created.map((c) => [c.orderType, c.deliveryFeeCents]), [["delivery", 725]]);
+  assertEquals(r.out.form.address?.delivery_quote_id, "q2");
+  assertStringIncludes(r.replies.at(-1)!, "https://pay.example/o/abc");
+});
+
+Deno.test("runner: a courier fee that moved before the link goes out with the new total", async () => {
+  const r = await courierOrder([725, 890]);
+  assertEquals(r.created.map((c) => c.deliveryFeeCents), [890]);
+  assertStringIncludes(r.replies.at(-1)!, "Total is now");
+  assertStringIncludes(r.replies.at(-1)!, "https://pay.example/o/abc");
+});
+
+Deno.test("runner: a courier that will not go to the address is the outside-the-area decline", async () => {
+  const r = await courierOrder(["refuse"], ["delivery", "12 main st"]);
+  assertEquals(r.out.form.address?.zone_ok, false);
+  assertEquals(r.out.form.address?.delivery_quote_cents, undefined);
+  assertStringIncludes(r.replies.at(-1)!, "outside");
+});
+
+Deno.test("runner: a courier that refuses at the link step does not send a link", async () => {
+  const r = await courierOrder([725, "refuse"]);
+  assertEquals(r.created.length, 0);
+  assertEquals(r.out.form.checkout_session_id, null);
+  assertEquals(r.out.form.confirmed, false);
+});
+
+Deno.test("runner: an own-driver shop never asks for a quote and keeps its flat fee", async () => {
+  const db = new FakeDb(); const d = deps(db, courierMoves);
+  let asked = 0; d.quoteDelivery = () => { asked++; return Promise.resolve({ ok: true as const, fee_cents: 1, quote_id: "x" }); };
+  const base = { shop: { ...courierShop, id: "vitos-own", delivery_provider: "own" }, conversationId: "c1", lastBotMessage: null, isFirstContact: false, cart: { id: "cart1", engine_form: null, stripe_checkout_session_id: null, test_mode: true, notes: null } } as Parameters<typeof runEngineTurn>[0];
+  let out = await runEngineTurn({ ...base, message: "delivery" }, d);
+  for (const m of ["12 main st", "garlic knots", "thats it", "no tip", "yes"]) out = await runEngineTurn({ ...base, message: m, cart: { ...base.cart, engine_form: out.form, stripe_checkout_session_id: out.form.checkout_session_id } }, d);
+  assertEquals(asked, 0);
+  assertEquals((d.created as Array<{ deliveryFeeCents: number }>).map((c) => c.deliveryFeeCents), [300]);
+});

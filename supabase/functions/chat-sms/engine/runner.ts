@@ -30,6 +30,8 @@ export interface RunnerShop {
   latitude: number | null;
   longitude: number | null;
   delivery_radius_mi: number | null;
+  /** "own" (flat fee, shop driver) or a courier provider that quotes per address; missing = "own" */
+  delivery_provider?: string | null;
 }
 export interface RunnerCart {
   id: string;
@@ -50,6 +52,10 @@ export interface CheckoutRequest {
   cartId: string; shopName: string; testMode: boolean; cartLines: ReturnType<typeof toCartJson>;
   orderType: "pickup" | "delivery"; deliveryFeeCents: number; tipCents: number; taxCents: number; notes: string | null;
 }
+/** a courier quote for a validated address; the adapter (index.ts) knows the shop, the provider and the credentials */
+export type QuoteDelivery = (req: { formatted: string; order_value_cents: number; cart_id: string; test: boolean }) =>
+  Promise<{ ok: true; fee_cents: number; quote_id: string } | { ok: false; code: "out_of_range" | "unavailable" | "bad_address" | "provider"; error: string }>;
+
 export interface RunnerDeps {
   supabase: SupabaseClient;
   model: ModelConfig;
@@ -57,6 +63,8 @@ export interface RunnerDeps {
   createCheckout: (req: CheckoutRequest) => Promise<{ ok: true; sessionId: string; url: string } | { ok: false; error: string }>;
   expireCheckout: (sessionId: string) => Promise<void>;
   serviceFeeCents: number;
+  /** courier shops only (shop.delivery_provider not "own"); absent = flat fee */
+  quoteDelivery?: QuoteDelivery;
   /** test seam; defaults to the real model call */
   interpretImpl?: typeof interpret;
   /** test seam; defaults to the real judge call (Jev via the same OpenRouter key) */
@@ -190,11 +198,20 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
     }
   }
 
-  // 2. addresses are validated by I/O before the pure turn sees them
+  // 2. addresses are validated by I/O before the pure turn sees them; a courier shop also prices the address
+  // (a courier that will not go there is the same decline as outside the radius)
+  const courier = !!deps.quoteDelivery && !!input.shop.delivery_provider && input.shop.delivery_provider !== "own";
+  const quoteFor = async (formatted: string) => deps.quoteDelivery!({ formatted, order_value_cents: totals(form0, menu).subtotal_cents, cart_id: input.cart.id, test: input.cart.test_mode });
   for (let i = 0; i < moves.length; i++) {
     const m = moves[i];
     if (m.kind === "answer" && m.field === "address" && !m.value.validated) {
-      moves[i] = { kind: "answer", field: "address", value: await deps.geocoder(m.value.text) };
+      let value = await deps.geocoder(m.value.text);
+      if (courier && value.validated && value.zone_ok) {
+        const q = await quoteFor(value.formatted ?? value.text);
+        value = q.ok ? { ...value, delivery_quote_cents: q.fee_cents, delivery_quote_id: q.quote_id } : { ...value, zone_ok: false };
+        if (!q.ok) console.warn(`[engine] courier quote refused cart=${input.cart.id.slice(0, 8)} code=${q.code} ${q.error}`);
+      }
+      moves[i] = { kind: "answer", field: "address", value };
     }
   }
 
@@ -221,8 +238,25 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
     try { await deps.expireCheckout(priorSession); } catch (e) { console.error("[engine] expire failed", e); }
     await deps.supabase.from("order_carts").update({ stripe_checkout_session_id: null, phase: "building" }).eq("id", input.cart.id);
   }
-  const t = totals(form, menu);
-  if (out.handoff && !form.checkout_session_id) {
+  let t = totals(form, menu);
+  let requoteFailed = false;
+  if (out.handoff && !form.checkout_session_id && courier && form.fulfillment === "delivery" && form.address?.validated) {
+    // the address quote may be many minutes old: price it again right before the link. A moved fee goes out
+    // as the relink shape (the change and the new total); a courier that now refuses is a checkout failure.
+    const q = await quoteFor(form.address.formatted ?? form.address.text);
+    if (q.ok) {
+      const moved = q.fee_cents !== form.address.delivery_quote_cents;
+      form.address = { ...form.address, delivery_quote_cents: q.fee_cents, delivery_quote_id: q.quote_id };
+      if (moved) { out.ledger.push({ turn: form.turn_no, event: "courier_fee_moved", data: { to: q.fee_cents } }); if (out.plan.question?.kind === "handoff") out.plan.question.relink = true; }
+      t = totals(form, menu);
+    } else { requoteFailed = true; out.ledger.push({ turn: form.turn_no, event: "courier_requote_failed", data: { code: q.code, error: q.error } }); }
+  }
+  if (out.handoff && !form.checkout_session_id && requoteFailed) {
+    form.confirmed = false; form.status = "confirming"; form.open = { kind: "confirm" };
+    out.plan.declines.push({ code: "checkout_failed" });
+    out.plan.question = null;
+    reply = render(out.plan, form, menu, { shop_name: menu.shop.name, phone_display: menu.shop.phone_display });
+  } else if (out.handoff && !form.checkout_session_id) {
     const res = await deps.createCheckout({
       cartId: input.cart.id, shopName: input.shop.name, testMode: input.cart.test_mode, cartLines: toCartJson(form, menu),
       orderType: form.fulfillment ?? "pickup", deliveryFeeCents: t.delivery_fee_cents, tipCents: t.tip_cents, taxCents: t.tax_cents, notes: input.cart.notes ?? null,

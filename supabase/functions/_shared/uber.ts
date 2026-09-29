@@ -164,7 +164,7 @@ export function makeUberProvider(cfg: UberConfig, fetchImpl: typeof fetch = fetc
 
   const placeFields = (prefix: "pickup" | "dropoff", p: Place) => ({
     [`${prefix}_address`]: uberAddress(p.address),
-    [`${prefix}_phone_number`]: p.phone,
+    ...(p.phone ? { [`${prefix}_phone_number`]: p.phone } : {}),
     ...(p.lat != null && p.lng != null ? { [`${prefix}_latitude`]: p.lat, [`${prefix}_longitude`]: p.lng } : {}),
   });
 
