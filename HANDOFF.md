@@ -437,7 +437,7 @@ sprintai-ordering/
 │       ├── verify-cycle-4.ts # Cycle 4 verification suite
 │       └── worker.ts         # launchd worker — drains test_run_queue (onboarding QA)
 ├── how-it-works.html         # Mobile sales explainer (signup→kit→2wk→pricing)
-├── why-orderfare.html        # Interactive cost-comparison vs DoorDash/Uber Eats (slider-driven)
+├── why-orderfare.html        # Interactive cost-comparison vs DoorDash/Uber Eats (slider-driven) — TAKEN DOWN 2026-09-29, see below
 ├── vitos-demo.html            # Vito's Pizza demo page (self-serve, QR-coded)
 ├── docs/demo/                # Erin (NJB) demo kit — 3-QR walkthrough email
 ├── netlify/
@@ -1663,13 +1663,23 @@ job has fired even once. Whoever picks this up next should check `cron.job_run_d
 before assuming this is live — a committed migration is not the same as an applied one on this
 project (see the migrations-105–111 gap earlier in `RUNBOOK.md`).
 
+## why-orderfare.html taken down while DoorDash Drive application is under review (2026-09-29)
+
+Jason pulled the "Why OrderFare" cost-comparison page from the public site (commit `4e1b1366`):
+removed from the nav/footer on `index.html`, removed from the public-site build allowlist in
+`scripts/build-public-site.sh`, and `/why-orderfare*` now 302-redirects to `/` via `netlify.toml`.
+The source file is untouched in the repo — this is a visibility change, not a deletion — pending
+word from Jason on when the DoorDash Drive application review clears.
+
 ## Open: the live site advertises $1.49/order, Stripe still charges $0.99 (found 2026-09-29)
 
-On `main` today, three customer-facing pages say the per-order fee is **$1.49**:
-`how-it-works.html`, `checkout/index.html`, and `why-orderfare.html` (all changed 2026-09-26,
-commit `a2b82e6b`). But the code that actually creates the Stripe charge,
-`SERVICE_FEE_CENTS` in `supabase/functions/_shared/connect.ts`, is still **99** — unchanged on
-`main`. A customer reading the site is told $1.49; the order they place is charged $0.99.
+On `main` today, two live customer-facing pages say the per-order fee is **$1.49**:
+`how-it-works.html` and `checkout/index.html` (changed 2026-09-26, commit `a2b82e6b`). A third,
+`why-orderfare.html`, carries the same $1.49 text but is no longer served (see takedown note
+above), so it's not currently part of the live discrepancy. The code that actually creates the
+Stripe charge, `SERVICE_FEE_CENTS` in `supabase/functions/_shared/connect.ts`, is still **99** —
+unchanged on `main`. A customer reading the site is told $1.49; the order they place is charged
+$0.99.
 
 The $1.49 constant does exist in the repo — on branch `engine/clean-sheet`
 (commit `61e3665e`, also 2026-09-26, "fee: $1.49 flat per order (Jason, 2026-09-26)") — but that
