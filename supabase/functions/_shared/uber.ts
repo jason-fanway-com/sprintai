@@ -151,7 +151,11 @@ export function makeUberProvider(cfg: UberConfig, fetchImpl: typeof fetch = fetc
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ client_id: cfg.client_id, client_secret: cfg.client_secret, grant_type: "client_credentials", scope: "eats.deliveries" }),
     });
-    if (!res.ok) throw new UberApiError(res.status, "auth", `uber auth failed: HTTP ${res.status}`); // never echo the body: it can repeat the request
+    if (!res.ok) {
+      // OAuth errors are a short code ("invalid_client", "invalid_scope"); keep only that, never the rest of the body
+      let code = ""; try { const e = await res.json() as { error?: unknown }; if (typeof e.error === "string" && /^[a-z_]{1,40}$/.test(e.error)) code = ` ${e.error}`; } catch { /* not JSON */ }
+      throw new UberApiError(res.status, "auth", `uber auth failed: HTTP ${res.status}${code}`);
+    }
     const j = await res.json() as { access_token: string; expires_in?: number };
     const ttl = Math.max(60, (j.expires_in ?? 3600) - 300) * 1000; // refresh five minutes early
     tokens.set(cfg.client_id, { token: j.access_token, until: Date.now() + ttl });

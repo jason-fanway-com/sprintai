@@ -146,3 +146,11 @@ Deno.test("webhook verifiers: test and live signing keys each verify their own e
     if (keep.l === undefined) Deno.env.delete("UBER_DIRECT_WEBHOOK_SECRET_LIVE"); else Deno.env.set("UBER_DIRECT_WEBHOOK_SECRET_LIVE", keep.l);
   }
 });
+
+Deno.test("an auth failure names Uber's OAuth error code and nothing else from the body", async () => {
+  _clearUberTokens();
+  const { f } = stub([(s) => s.url.includes("auth.uber.com") ? json({ error: "invalid_scope", error_description: "echo csec" }, 400) : null]);
+  const q = await makeUberProvider(CFG, f).quote({ pickup: SHOP, dropoff: CUST, order_value_cents: 1, external_id: "c" });
+  assert(isQuoteError(q));
+  assertEquals(q.error, "uber auth failed: HTTP 400 invalid_scope");
+});

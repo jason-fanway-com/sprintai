@@ -31,6 +31,9 @@ def main():
     cart = e2e.cart_for(a.shop, s)
     print(f"\ncart {cart and cart['id']}  turns {turns}  delivery fee {cart and cart['delivery_fee_cents']}  tip {cart and cart['driver_tip_cents']}  total {cart and cart['total_cents']}")
     if not m or not cart: print("FAIL: no pay link"); sys.exit(1)
+    if cart.get("order_type") != "delivery":
+        refused = e2e.get(f"engine_ledger?cart_id=eq.{cart['id']}&event=eq.courier_quote_refused&select=data")
+        print("FAIL: the order fell back to pickup; courier quote refused:", json.dumps([r["data"] for r in refused])); sys.exit(1)
     url = m.group(0).rstrip(".,)")
     print("paying the Stripe TEST checkout ...")
     p = subprocess.run(["node", os.path.join(os.path.dirname(__file__), "pay-test-checkout.cjs"), url], capture_output=True, text=True, timeout=240)
