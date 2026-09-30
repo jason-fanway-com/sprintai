@@ -152,5 +152,16 @@ Deno.test("an auth failure names Uber's OAuth error code and nothing else from t
   const { f } = stub([(s) => s.url.includes("auth.uber.com") ? json({ error: "invalid_scope", error_description: "echo csec" }, 400) : null]);
   const q = await makeUberProvider(CFG, f).quote({ pickup: SHOP, dropoff: CUST, order_value_cents: 1, external_id: "c" });
   assert(isQuoteError(q));
-  assertEquals(q.error, "uber auth failed: HTTP 400 invalid_scope");
+  assertEquals(q.error, "uber auth failed: HTTP 400 invalid_scope (without a scope)");
+});
+
+Deno.test("keys that refuse the eats.deliveries scope by name get a token without a scope", async () => {
+  _clearUberTokens();
+  const { f, seen } = stub([
+    (s) => s.url.includes("auth.uber.com") ? (new URLSearchParams(s.body).get("scope") ? json({ error: "invalid_scope" }, 400) : json({ access_token: "tok2", expires_in: 100 })) : null,
+    (s) => s.url.includes("delivery_quotes") ? json({ id: "dqt_9", fee: 650, expires: "x" }) : null]);
+  const q = await makeUberProvider(CFG, f).quote({ pickup: SHOP, dropoff: CUST, order_value_cents: 1, external_id: "c" });
+  assert(!isQuoteError(q)); assertEquals(q.fee_cents, 650);
+  assertEquals(seen.filter((s) => s.url.includes("auth.uber.com")).length, 2);
+  assertEquals(seen.at(-1)!.headers.get("authorization"), "Bearer tok2");
 });

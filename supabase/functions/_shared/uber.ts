@@ -146,21 +146,28 @@ export function makeUberProvider(cfg: UberConfig, fetchImpl: typeof fetch = fetc
   async function token(): Promise<string> {
     const hit = tokens.get(cfg.client_id);
     if (hit && hit.until > Date.now()) return hit.token;
-    const res = await fetchImpl(authUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ client_id: cfg.client_id, client_secret: cfg.client_secret, grant_type: "client_credentials", scope: "eats.deliveries" }),
-    });
-    if (!res.ok) {
+    // eats.deliveries is the documented scope; some Direct organizations' keys refuse it by name (invalid_scope)
+    // yet carry delivery access by default, so ask once more without naming a scope before giving up
+    for (const scope of ["eats.deliveries", null]) {
+      const res = await fetchImpl(authUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ client_id: cfg.client_id, client_secret: cfg.client_secret, grant_type: "client_credentials", ...(scope ? { scope } : {}) }),
+      });
+      if (res.ok) {
+        const j = await res.json() as { access_token: string; expires_in?: number };
+        const ttl = Math.max(60, (j.expires_in ?? 3600) - 300) * 1000; // refresh five minutes early
+        tokens.set(cfg.client_id, { token: j.access_token, until: Date.now() + ttl });
+        return j.access_token;
+      }
       // OAuth errors are a short code ("invalid_client", "invalid_scope"); keep only that, never the rest of the body
-      let code = ""; try { const e = await res.json() as { error?: unknown }; if (typeof e.error === "string" && /^[a-z_]{1,40}$/.test(e.error)) code = ` ${e.error}`; } catch { /* not JSON */ }
-      throw new UberApiError(res.status, "auth", `uber auth failed: HTTP ${res.status}${code}`);
+      let code = ""; try { const e = await res.json() as { error?: unknown }; if (typeof e.error === "string" && /^[a-z_]{1,40}$/.test(e.error)) code = e.error; } catch { /* not JSON */ }
+      if (code === "invalid_scope" && scope) continue;
+      throw new UberApiError(res.status, "auth", `uber auth failed: HTTP ${res.status}${code ? ` ${code}` : ""}${scope ? "" : " (without a scope)"}`);
     }
-    const j = await res.json() as { access_token: string; expires_in?: number };
-    const ttl = Math.max(60, (j.expires_in ?? 3600) - 300) * 1000; // refresh five minutes early
-    tokens.set(cfg.client_id, { token: j.access_token, until: Date.now() + ttl });
-    return j.access_token;
+    throw new UberApiError(400, "auth", "uber auth failed");
   }
+
 
   async function call<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<{ ok: true; data: T } | { ok: false; status: number; err: UberError }> {
     for (let attempt = 0; attempt < 2; attempt++) {
