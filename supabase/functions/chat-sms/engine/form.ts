@@ -11,7 +11,7 @@ export interface Address {
   validated: boolean;
   zone_ok: boolean;
   /** read_as: the geocoder read the street differently from what was typed ("w union st" -> "Union St"): say so, take a correction. delivery_quote_*: a courier shop's quote for this address (runner); a new address carries its own */
-  read_as?: boolean; delivery_quote_cents?: number; delivery_quote_id?: string;
+  read_as?: boolean; delivery_quote_cents?: number; delivery_quote_id?: string; /** the courier that priced it ("uber"); the pay-link line names it */ delivery_courier?: string;
 }
 
 export type Tip = { kind: "percent"; value: number } | { kind: "cents"; value: number };

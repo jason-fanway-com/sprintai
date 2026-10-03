@@ -185,7 +185,7 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
         T.confirmAsk(q.count),
       ].join("\n"));
     } else if (q.kind === "handoff") {
-      const pay = `${q.relink ? T.relink() + " " : ""}${T.handoff(q.url)} ${T.afterPay(form.fulfillment === "delivery")}`.trim();
+      const pay = `${q.relink ? T.relink() + " " : ""}${T.handoff(q.url)} ${T.afterPay(form.fulfillment === "delivery", form.address?.delivery_quote_id ? form.address.delivery_courier : null)}`.trim();
       parts.push(q.relink ? `${T.relinkTotal(dollars(q.totals.total_cents))} ${pay}` : pay); // the customer confirmed the whole order once; a change shows the change and the new total
     }
   }

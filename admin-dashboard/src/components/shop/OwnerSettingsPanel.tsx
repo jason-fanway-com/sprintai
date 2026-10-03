@@ -22,6 +22,7 @@ export interface OwnerShopSettings {
   wing_flavors_included: number | null
   wing_mix_extra: boolean | null
   upsell_enabled: boolean
+  delivery_provider?: string | null
 }
 
 const DAYS: { key: string; label: string }[] = [
@@ -209,6 +210,7 @@ export default function OwnerSettingsPanel({ shopId, settings, onSaved }: { shop
     settings?.wing_mix_extra === true ? 'extra' : settings?.wing_mix_extra === false ? 'included' : 'unset',
   )
   const [upsellEnabled, setUpsellEnabled] = useState<boolean>(settings?.upsell_enabled ?? true)
+  const [deliveryProvider, setDeliveryProvider] = useState<'own' | 'uber'>(settings?.delivery_provider === 'uber' ? 'uber' : 'own')
   const [saving, setSaving] = useState(false)
 
   // Re-sync drafts when the shop or its settings load/change (e.g. switching shops in preview).
@@ -222,7 +224,8 @@ export default function OwnerSettingsPanel({ shopId, settings, onSaved }: { shop
     setWingFlavorsIncluded(settings?.wing_flavors_included != null ? String(settings.wing_flavors_included) : '')
     setWingMixExtra(settings?.wing_mix_extra === true ? 'extra' : settings?.wing_mix_extra === false ? 'included' : 'unset')
     setUpsellEnabled(settings?.upsell_enabled ?? true)
-  }, [settings?.id, settings?.open_hours, settings?.delivery_hours, settings?.delivery_enabled, settings?.delivery_radius_mi, settings?.delivery_fee_cents, settings?.ai_instructions, settings?.wing_flavors_included, settings?.wing_mix_extra, settings?.upsell_enabled])
+    setDeliveryProvider(settings?.delivery_provider === 'uber' ? 'uber' : 'own')
+  }, [settings?.id, settings?.open_hours, settings?.delivery_hours, settings?.delivery_enabled, settings?.delivery_radius_mi, settings?.delivery_fee_cents, settings?.ai_instructions, settings?.wing_flavors_included, settings?.wing_mix_extra, settings?.upsell_enabled, settings?.delivery_provider])
 
   if (!settings) return <div className="text-center py-12 text-gray-400">Loading settings...</div>
 
@@ -257,6 +260,9 @@ export default function OwnerSettingsPanel({ shopId, settings, onSaved }: { shop
     const mixExtra = wingMixExtra === 'unset' ? null : wingMixExtra === 'extra'
     if (flavorsNum !== settings.wing_flavors_included || mixExtra !== settings.wing_mix_extra) {
       ops.push({ intent: 'SET_WING_POLICY', wing_flavors_included: flavorsNum, wing_mix_extra: mixExtra })
+    }
+    if (deliveryProvider !== (settings.delivery_provider === 'uber' ? 'uber' : 'own')) {
+      ops.push({ intent: 'SET_DELIVERY_PROVIDER', delivery_provider: deliveryProvider })
     }
     if (upsellEnabled !== settings.upsell_enabled) {
       ops.push({ intent: 'SET_UPSELL_ENABLED', upsell_enabled: upsellEnabled })
@@ -323,6 +329,21 @@ export default function OwnerSettingsPanel({ shopId, settings, onSaved }: { shop
             <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
             This won't actually turn delivery on for customers yet — missing: {missingForDelivery.join(', ')}. The save will fail with a reason until both are set.
           </p>
+        )}
+        <div className="flex items-center gap-2 text-sm text-gray-600">
+          Who delivers
+          {(['own', 'uber'] as const).map(p => (
+            <button
+              key={p}
+              onClick={() => setDeliveryProvider(p)}
+              className={`text-xs px-3 py-1 rounded-full border ${deliveryProvider === p ? 'border-green-200 text-green-700 bg-green-50' : 'border-gray-200 text-gray-500 bg-gray-50'}`}
+            >
+              {p === 'own' ? 'Shop delivery' : 'Uber delivery'}
+            </button>
+          ))}
+        </div>
+        {deliveryProvider === 'uber' && (
+          <p className="text-xs text-gray-500">Uber quotes each address and that price is the customer's delivery fee; the flat fee below is not used.</p>
         )}
         <div className="flex items-center gap-4">
           <label className="flex items-center gap-1.5 text-sm text-gray-600">

@@ -93,7 +93,9 @@ export const T = {
   handoff: (url: string | null) => (url ? `Pay here: ${url}` : `I couldn't create your payment link just now.`),
   checkoutFailed: () => `I couldn't create your payment link just now. Reply YES to try again.`,
   // the same wait the paid receipt promises (index.ts): pickup 10-15 min, delivery 30-45 min
-  afterPay: (delivery: boolean) => delivery ? `On its way about 30-45 min after you pay.` : `Ready about 10-15 min after you pay.`,
+  afterPay: (delivery: boolean, courier?: string | null) => !delivery ? `Ready about 10-15 min after you pay.`
+    : courier === "uber" ? `Awesome, I'll Uber it to you, about 30-45 min after you pay. Enjoy!!`
+    : `On its way about 30-45 min after you pay.`,
 
   lineUnresolved: (span: string, c: number) => [
     `Hmm, I couldn't find "${span}" on our menu. What is it, or what would you like instead?`,

@@ -124,6 +124,7 @@ interface Proposal {
   delivery_hours?: Record<string, DayHours>;
   delivery_enabled?: boolean;
   upsell_enabled?: boolean;
+  delivery_provider?: "own" | "uber";
   ai_instructions?: string;
   wing_flavors_included?: number | null;
   wing_mix_extra?: boolean | null;
@@ -455,6 +456,19 @@ const ADMIN_TOOLS = [
     },
   },
   {
+    name: "SET_DELIVERY_PROVIDER",
+    description: "Choose who delivers this shop's delivery orders: the shop's own drivers (\"own\", flat delivery fee) or Uber (\"uber\", Uber prices each address and sends a courier). This does not turn delivery on or off — that is SET_DELIVERY_ENABLED.",
+    input_schema: {
+      type: "object",
+      properties: {
+        delivery_provider: { type: "string", enum: ["own", "uber"] },
+        needs_clarification: { type: "boolean" },
+        summary: { type: "string", description: "e.g. 'Deliver with Uber instead of shop drivers'" },
+      },
+      required: ["delivery_provider", "needs_clarification", "summary"],
+    },
+  },
+  {
     name: "SET_UPSELL_ENABLED",
     description: "Turn the ordering bot's upsell suggestions on or off for this shop (e.g. offering cream cheese with a bagel, or a drink with a sandwich). When off, the bot takes exactly what the customer asks for and doesn't suggest add-ons.",
     input_schema: {
@@ -584,6 +598,7 @@ CRITICAL RULES — VIOLATING ANY OF THESE IS A BUG:
 13a. For ADD_ITEM: name and price are required and must come verbatim from the owner — never invent either. If category is not given, leave it out (the backend defaults it).
 13b. For REMOVE_ITEM: resolve against the REAL menu, same as EIGHTYSIX_ITEM. If the owner just wants it unavailable for tonight, that's EIGHTYSIX_ITEM, not REMOVE_ITEM — only use REMOVE_ITEM when they clearly mean permanently taking it off the menu.
 14. For SET_STORE_HOURS / SET_DELIVERY_HOURS: every one of mon,tue,wed,thu,fri,sat,sun must be present, each either {"closed":true} or {"closed":false,"open":"HH:MM","close":"HH:MM"}. If the owner only gives some days, set needs_clarification=true and ask about the rest rather than guessing.
+15a. For SET_DELIVERY_PROVIDER: "use Uber", "Uber delivers for us", "switch delivery to Uber" -> uber; "our own drivers", "we deliver ourselves", "stop using Uber" -> own. It only changes who delivers, never whether delivery is offered.
 15. For SET_DELIVERY_ENABLED: this is a PERMANENT on/off switch, not a same-day pause. If the owner says something like "pause delivery" or "turn delivery back on" for today, use PAUSE_DELIVERY/RESUME_DELIVERY instead. Only use SET_DELIVERY_ENABLED for "stop offering delivery" / "start offering delivery" style permanent requests.
 16. For SET_SHOP_INSTRUCTIONS: capture the owner's instructions verbatim into ai_instructions; do not summarize or rewrite their wording.
 17. For SET_WING_POLICY: capture wing_flavors_included and/or wing_mix_extra only from what the owner explicitly states.
@@ -850,6 +865,23 @@ async function validateProposal(
       if (proposal.delivery_enabled === true) {
         const gateErr = await checkDeliveryEnableGate(supabase, shopId, null);
         if (gateErr) return { valid: false, error: gateErr };
+      }
+      return { valid: true };
+    }
+    case "SET_DELIVERY_PROVIDER": {
+      if (proposal.needs_clarification) {
+        return { valid: true, clarification: makeClarificationCard(proposal) };
+      }
+      if (proposal.delivery_provider !== "own" && proposal.delivery_provider !== "uber") {
+        return { valid: false, error: "Choose who delivers: the shop's own drivers or Uber." };
+      }
+      if (proposal.delivery_provider === "uber") {
+        const { data: s } = await supabase.from("shops").select("formatted_address, is_test").eq("id", shopId).single();
+        if (!s?.formatted_address) return { valid: false, error: "Set the shop's address first — Uber needs it to pick up." };
+        // a real customer's order books with the production Uber keys; without them every delivery would be declined
+        if (!s?.is_test && !(Deno.env.get("UBER_DIRECT_LIVE_CLIENT_SECRET") ?? "").trim()) {
+          return { valid: false, error: "Uber isn't connected for real orders yet. Ask OrderFare to finish the Uber setup first." };
+        }
       }
       return { valid: true };
     }
@@ -1510,6 +1542,17 @@ async function executeAction(
       resultMsg = proposal.delivery_enabled
         ? "Delivery is now enabled for this shop."
         : "Delivery is now turned off for this shop — the bot will refuse delivery orders.";
+      break;
+    }
+    case "SET_DELIVERY_PROVIDER": {
+      const { data: curShop } = await supabase.from("shops").select("delivery_provider").eq("id", shopId).single();
+      beforeSnapshot = { type: "delivery_provider", delivery_provider_before: curShop?.delivery_provider ?? null };
+      await supabase.from("shops").update({ delivery_provider: proposal.delivery_provider }).eq("id", shopId);
+      logEdit({ table_name: "shops", row_id: shopId, before: { delivery_provider: curShop?.delivery_provider ?? null }, after: { delivery_provider: proposal.delivery_provider } });
+      afterSnapshot = { type: "delivery_provider", delivery_provider_after: proposal.delivery_provider };
+      resultMsg = proposal.delivery_provider === "uber"
+        ? "Delivery orders now go to Uber. Uber prices each address and sends a courier."
+        : "Delivery orders now go to your own drivers, at your flat delivery fee.";
       break;
     }
     case "SET_UPSELL_ENABLED": {

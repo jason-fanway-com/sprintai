@@ -283,6 +283,7 @@ Deno.test("runner: a courier shop prices the address with a quote, reads it back
   assertEquals(r.created.map((c) => [c.orderType, c.deliveryFeeCents]), [["delivery", 725]]);
   assertEquals(r.out.form.address?.delivery_quote_id, "q2");
   assertStringIncludes(r.replies.at(-1)!, "https://pay.example/o/abc");
+  assertStringIncludes(r.replies.at(-1)!, "I'll Uber it to you"); // an Uber shop says so with the link
 });
 
 Deno.test("runner: a courier fee that moved before the link goes out with the new total", async () => {
@@ -314,4 +315,6 @@ Deno.test("runner: an own-driver shop never asks for a quote and keeps its flat 
   for (const m of ["12 main st", "garlic knots", "thats it", "no tip", "yes"]) out = await runEngineTurn({ ...base, message: m, cart: { ...base.cart, engine_form: out.form, stripe_checkout_session_id: out.form.checkout_session_id } }, d);
   assertEquals(asked, 0);
   assertEquals((d.created as Array<{ deliveryFeeCents: number }>).map((c) => c.deliveryFeeCents), [300]);
+  assertStringIncludes(out.reply, "On its way about 30-45 min");
+  assert(!out.reply.includes("Uber"), out.reply);
 });
