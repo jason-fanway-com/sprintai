@@ -6,7 +6,7 @@ usage: uber-e2e.py --shop <uuid> [--address "..."] [--wait-min 20]
 Costs: one model call per non-closed message (about 5), Stripe test mode and Uber sandbox are free.
 Reads credentials the same way e2e.py does; prints no secrets.
 """
-import argparse, json, re, subprocess, sys, time, uuid, os
+import argparse, json, re, shutil, subprocess, sys, time, uuid, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "engine"))
 import e2e  # noqa: E402  (loads the service credentials into this process only)
 
@@ -24,8 +24,8 @@ def main():
         r = say(m)
     for _ in range(4):  # answer whatever is left (tip, confirm), bounded
         if "Pay here" in r or "pay.getsprintai" in r: break
-        if re.search(r"\btip\b", r, re.I): r = say("$3 tip")
-        elif "Reply YES" in r or "YES" in r: r = say("yes")
+        if "YES" in r: r = say("yes")  # the read-back also says "Tip", so YES must win
+        elif re.search(r"\btip\b", r, re.I): r = say("$3 tip")
         else: r = say("thats it")
     m = re.search(r"https://\S+", r)
     cart = e2e.cart_for(a.shop, s)
@@ -36,7 +36,7 @@ def main():
         print("FAIL: the order fell back to pickup; courier quote refused:", json.dumps([r["data"] for r in refused])); sys.exit(1)
     url = m.group(0).rstrip(".,)")
     print("paying the Stripe TEST checkout ...")
-    p = subprocess.run(["node", os.path.join(os.path.dirname(__file__), "pay-test-checkout.cjs"), url], capture_output=True, text=True, timeout=240)
+    p = subprocess.run([shutil.which("node") or "/opt/homebrew/bin/node", os.path.join(os.path.dirname(__file__), "pay-test-checkout.cjs"), url], capture_output=True, text=True, timeout=240)
     print((p.stdout + p.stderr).strip())
     if p.returncode != 0: sys.exit(1)
     deadline = time.time() + a.wait_min * 60; last = None; row = None
