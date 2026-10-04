@@ -51,10 +51,10 @@ case directly to a skeptical owner: a slider lets them enter their own average
 order size and watch, live, what DoorDash/Uber Eats commissions and hidden
 menu markup would have cost versus OrderFare's flat per-order fee. It exists
 to defuse the most common objection — "we already use a delivery app" — with
-the owner's own numbers instead of a generic pitch. **Taken off the public
-site as of 2026-09-29** while a DoorDash Drive application is under review —
-the source page still exists in the repo, just not linked or built into the
-live site, until Jason clears it to go back up.
+the owner's own numbers instead of a generic pitch. Taken off the public site
+on 2026-09-29 while a DoorDash Drive application was under review, then
+republished on 2026-10-03 once Jason cleared it — it's live again, linked
+from the nav and footer.
 
 Two user surfaces:
 
