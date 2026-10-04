@@ -21,7 +21,7 @@ interface CartRow {
 interface ShopRow {
   id: string; tenant_id: string; name: string; formatted_address: string | null; latitude: number | null; longitude: number | null;
   phone_number_e164: string | null; courier_pickup_phone: string | null; courier_pickup_notes: string | null;
-  delivery_provider: string | null; prep_minutes: number | null;
+  delivery_provider: string | null; prep_minutes: number | null; is_test: boolean | null;
 }
 
 export async function bookCourierForPaidCart(
@@ -34,7 +34,7 @@ export async function bookCourierForPaidCart(
   if (!cart) return { booked: false, reason: "no_cart" };
   if (cart.order_type !== "delivery") return { booked: false, reason: "not_delivery" };
   const { data: s } = await db.from("shops")
-    .select("id, tenant_id, name, formatted_address, latitude, longitude, phone_number_e164, courier_pickup_phone, courier_pickup_notes, delivery_provider, prep_minutes")
+    .select("id, tenant_id, name, formatted_address, latitude, longitude, phone_number_e164, courier_pickup_phone, courier_pickup_notes, delivery_provider, prep_minutes, is_test")
     .eq("id", cart.shop_id).maybeSingle();
   const shop = s as ShopRow | null;
   if (!shop) return { booked: false, reason: "no_shop" };
@@ -44,7 +44,7 @@ export async function bookCourierForPaidCart(
     await raiseIssue(db, shop, cart, error);
     return { booked: false, reason, error };
   };
-  const test = cart.test_mode === true;
+  const test = cart.test_mode === true || shop.is_test === true; // a test shop can never book a real driver
   const provider = providerFor(shop.delivery_provider, test);
   if (!provider) return fail("no_credentials", `${shop.delivery_provider} ${test ? "sandbox" : "live"} credentials are not configured`);
   const dropAddr = cart.delivery_address?.formatted;

@@ -2123,7 +2123,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     if (lastExpired) priorLinkExpired = true;
     const { data: newCart, error: cartErr } = await supabase
       .from("order_carts")
-      .insert({ shop_id: shop.id, conversation_id: conversation.id, phase: "greeting", cart_json: [], test_mode: false, order_type: shop.delivery_enabled ? null : "pickup" })
+      .insert({ shop_id: shop.id, conversation_id: conversation.id, phase: "greeting", cart_json: [], test_mode: (shop as { is_test?: boolean }).is_test === true, order_type: shop.delivery_enabled ? null : "pickup" })
       .select("*").single();
     if (cartErr || !newCart) {
       console.error("[chat-sms] Failed to create cart:", cartErr);
@@ -2239,6 +2239,12 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   // ── Build effective menu ──────────────────────────────────────────────────
   const businessDate  = getBusinessDate(shop.timezone);
   const currentTime   = getCurrentTime(shop.timezone);
+  // A test shop (is_test: Vito's) takes only test orders: test Stripe, the courier's sandbox, no hours gate.
+  // Nobody types TESTMODE there; RESET starts a fresh test.
+  if ((shop as { is_test?: boolean }).is_test === true && !cart.test_mode) {
+    await supabase.from("order_carts").update({ test_mode: true }).eq("id", cart.id);
+    cart.test_mode = true;
+  }
   // ── Business hours check ────────────────────────────────────────────────
   // todayKey/todayHours/nowMins/isOpen/effectiveOpen are computed once, above,
   // before the RESET handler (which also needs to know if the kitchen is open).
@@ -2470,7 +2476,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         serviceFeeCents: SERVICE_FEE_CENTS,
         // courier shops (migration 148): the provider prices each address; the shop's own fee otherwise
         quoteDelivery: async (req) => {
-          const p = providerFor(courierShop.delivery_provider, req.test);
+          const p = providerFor(courierShop.delivery_provider, req.test || (shop as { is_test?: boolean }).is_test === true); // a test shop never quotes live
           if (!p || !courierShop.formatted_address) return { ok: false, code: "provider", error: !p ? `${courierShop.delivery_provider} credentials not configured` : "shop has no formatted_address" };
           try {
             const q = await p.quote({

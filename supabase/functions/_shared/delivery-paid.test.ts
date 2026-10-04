@@ -66,3 +66,14 @@ Deno.test("a web test conversation (no phone) books with the shop's number as th
   assert(!r2.booked);
   assertEquals(live.tables("issues").length, 1);
 });
+
+Deno.test("a test shop books with sandbox credentials even when the cart is not marked test", async () => {
+  const live = seed({ cart: { test_mode: false } });
+  const seenLive: boolean[] = [];
+  await bookCourierForPaidCart(live.client, "cart_1", (_n, t) => { seenLive.push(t); return makeFakeProvider({ fee_cents: 725 }); }, NOW);
+  assertEquals(seenLive, [false], "a real shop's live cart uses live credentials");
+  const vitos = seed({ cart: { test_mode: false }, shop: { is_test: true } });
+  const seen: boolean[] = [];
+  await bookCourierForPaidCart(vitos.client, "cart_1", (_n, t) => { seen.push(t); return makeFakeProvider({ fee_cents: 725 }); }, NOW);
+  assertEquals(seen, [true], "is_test forces the sandbox: a test shop can never send a real driver");
+});
