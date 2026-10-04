@@ -342,9 +342,6 @@ export default function OwnerSettingsPanel({ shopId, settings, onSaved }: { shop
             </button>
           ))}
         </div>
-        {deliveryProvider === 'uber' && (
-          <p className="text-xs text-gray-500">Uber quotes each address and that price is the customer's delivery fee; the flat fee below is not used.</p>
-        )}
         <div className="flex items-center gap-4">
           <label className="flex items-center gap-1.5 text-sm text-gray-600">
             Radius
@@ -359,6 +356,9 @@ export default function OwnerSettingsPanel({ shopId, settings, onSaved }: { shop
             />
             miles
           </label>
+          {deliveryProvider === 'uber' ? (
+            <span className="text-sm text-gray-500">Delivery fee: set by Uber for each address</span>
+          ) : (
           <label className="flex items-center gap-1.5 text-sm text-gray-600">
             Delivery fee $
             <input
@@ -371,6 +371,7 @@ export default function OwnerSettingsPanel({ shopId, settings, onSaved }: { shop
               className="w-24 px-2 py-1 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500"
             />
           </label>
+          )}
         </div>
         <HoursEditor title="Delivery hours" draft={deliveryHoursDraft} onChange={setDeliveryHoursDraft} />
       </div>
