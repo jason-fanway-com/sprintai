@@ -135,6 +135,21 @@ export async function applyDeliveryEvent(db: SupabaseClient, providerName: strin
   return { applied: false, reason: "conflict" };
 }
 
+// ─── customer notices ──────────────────────────────────────────────────────
+/** the delivery moments OrderFare texts the customer about (the receipt already carries "booked" + the link) */
+export const NOTICE_STATUSES: ReadonlySet<DeliveryStatus> = new Set<DeliveryStatus>(["picked_up", "dropped_off", "canceled", "returned"]);
+
+/** exactly once per status: marks the notice in events; false when it was already claimed or a concurrent write won */
+export async function claimDeliveryNotice(db: SupabaseClient, row: DeliveryRow, status: DeliveryStatus, now = new Date()): Promise<boolean> {
+  if (!NOTICE_STATUSES.has(status) || row.status !== status) return false;
+  const events = row.events ?? [];
+  if (events.some((e) => e.source === "notice" && e.status === status)) return false;
+  const { data } = await db.from("deliveries")
+    .update({ events: [...events, { at: now.toISOString(), status, source: "notice" }].slice(-MAX_EVENTS), updated_at: now.toISOString() })
+    .eq("id", row.id).eq("updated_at", row.updated_at).select("id");
+  return !!data && (data as unknown[]).length > 0;
+}
+
 // ─── cancel ────────────────────────────────────────────────────────────────
 export type CancelOutcome =
   | { cancelled: true; status: DeliveryStatus; fee_cents: number }

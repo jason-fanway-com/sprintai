@@ -50,6 +50,7 @@ export type OutboundReason =
   | "inbound_reply"
   | "payment_confirmed"
   | "order_refunded"
+  | "delivery_update"
   | "merchant_welcome"
   | "owner_escalation";
 
@@ -77,6 +78,10 @@ export interface OutboundContext {
    */
   cartPaymentStatus?: string | null;
   cartRefundedCents?: number | null;
+  /** delivery_update: the courier status being announced (picked_up / dropped_off / canceled / returned) */
+  deliveryStatus?: string | null;
+  /** delivery_update: this notice won the exactly-once claim on the deliveries row */
+  deliveryNoticeClaimed?: boolean | null;
   /** merchant_welcome: the merchant's own subscription/checkout completed. */
   subscriptionActive?: boolean | null;
 
@@ -171,6 +176,18 @@ export function assertOutboundAllowed(ctx: OutboundContext): GuardDecision {
         return { allow: false, reason, why: "order_refunded with no real refund on cart" };
       }
       return { allow: true, reason, why: "refund notice for refunded cart" };
+    }
+
+    case "delivery_update": {
+      // courier progress on the customer's own paid order (Jason, 2026-10-04): OrderFare sends these, not the courier
+      if (!ctx.cartId) return { allow: false, reason, why: "delivery_update missing cart id" };
+      const status = (ctx.cartPaymentStatus ?? "").toLowerCase();
+      if (!PAID_STATES.has(status)) return { allow: false, reason, why: `delivery_update cart not in paid state (status=${status || "none"})` };
+      if (!["picked_up", "dropped_off", "canceled", "returned"].includes(ctx.deliveryStatus ?? "")) {
+        return { allow: false, reason, why: `delivery_update for a status that is not announced (${ctx.deliveryStatus ?? "none"})` };
+      }
+      if (ctx.deliveryNoticeClaimed !== true) return { allow: false, reason, why: "delivery_update without exactly-once claim" };
+      return { allow: true, reason, why: "courier progress on a paid delivery order" };
     }
 
     case "merchant_welcome": {

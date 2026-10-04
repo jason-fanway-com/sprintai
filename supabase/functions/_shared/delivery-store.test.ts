@@ -1,7 +1,7 @@
 // Tests for _shared/delivery-store.ts and the delivery-webhook handler, against an in-memory table store
 // and the fake provider. No network, no database.
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { applyDeliveryEvent, bookDelivery, cancelDeliveryForCart, type BookInput } from "./delivery-store.ts";
+import { applyDeliveryEvent, bookDelivery, cancelDeliveryForCart, claimDeliveryNotice, deliveryForCart, type BookInput } from "./delivery-store.ts";
 import { makeFakeProvider } from "./delivery-fake.ts";
 import type { Place, WebhookEvent } from "./delivery.ts";
 import { handle } from "../delivery-webhook/index.ts";
@@ -103,4 +103,33 @@ Deno.test("delivery-webhook: routes by path, 401 on a bad signature, 404 on an u
   assertEquals(tables("deliveries")[0].status, "picked_up");
   const unknown = await post("uber", { ...ev("picked_up", "w2"), delivery_id: "other" }, "s3cret");
   assertEquals([unknown.status, (await unknown.json()).reason], [200, "unknown_delivery"]);
+});
+
+Deno.test("delivery-webhook: picked up, delivered and canceled ask chat-sms to text the customer once each; other moves and replays do not", async () => {
+  const { client, tables } = memDb();
+  tables("order_carts").push({ id: "cart_1", shop_id: "shop_1", conversation_id: "conv_1" });
+  const p = makeFakeProvider({ webhookSecret: "s3cret" });
+  await bookDelivery(client, p, input());
+  const asked: string[] = [];
+  const post = (body: unknown) => handle(new Request("https://x.supabase.co/functions/v1/delivery-webhook/uber", { method: "POST", body: JSON.stringify(body), headers: { "x-fake-signature": "s3cret" } }), client, () => [p], (c) => { asked.push(`${c.id}/${c.conversation_id}`); return Promise.resolve(); });
+  await post(ev("courier_assigned", "w1"));
+  assertEquals(asked, [], "assigned is covered by the receipt");
+  await post(ev("picked_up", "w2"));
+  await post(ev("picked_up", "w3")); // a second picked-up event (courier_update) is not a move
+  await post(ev("dropped_off", "w4"));
+  await post(ev("dropped_off", "w4")); // replay
+  assertEquals(asked, ["cart_1/conv_1", "cart_1/conv_1"]);
+});
+
+Deno.test("claimDeliveryNotice: once per status, only for the status the row is in", async () => {
+  const { client } = memDb();
+  const p = makeFakeProvider({ webhookSecret: "s3cret" });
+  await bookDelivery(client, p, input());
+  let row = (await deliveryForCart(client, "cart_1"))!;
+  assertEquals(await claimDeliveryNotice(client, row, "picked_up"), false, "row is still created");
+  await applyDeliveryEvent(client, p.name, ev("picked_up", "w1"));
+  row = (await deliveryForCart(client, "cart_1"))!;
+  assertEquals(await claimDeliveryNotice(client, row, "picked_up"), true);
+  row = (await deliveryForCart(client, "cart_1"))!;
+  assertEquals(await claimDeliveryNotice(client, row, "picked_up"), false, "already announced");
 });

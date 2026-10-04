@@ -223,3 +223,15 @@ Deno.test("stage=outbound_send: __errorLogged flag is set on the thrown error af
   }
   assertEquals((caughtErr as { __errorLogged?: boolean }).__errorLogged, true);
 });
+
+// ─── delivery_update ──────────────────────────────────────────────────────
+Deno.test("ALLOW: delivery_update for a paid cart, an announced status, and a won claim", () => {
+  const ctx: OutboundContext = { reason: "delivery_update", cartId: "cart_1", cartPaymentStatus: "paid", deliveryStatus: "picked_up", deliveryNoticeClaimed: true };
+  assertEquals(assertOutboundAllowed(ctx).allow, true);
+});
+Deno.test("DENY: delivery_update without a paid cart, an announced status, or the claim", () => {
+  const ok: OutboundContext = { reason: "delivery_update", cartId: "cart_1", cartPaymentStatus: "paid", deliveryStatus: "dropped_off", deliveryNoticeClaimed: true };
+  for (const bad of [{ cartId: null }, { cartPaymentStatus: "pending" }, { deliveryStatus: "courier_assigned" }, { deliveryStatus: null }, { deliveryNoticeClaimed: false }]) {
+    assertEquals(assertOutboundAllowed({ ...ok, ...bad } as OutboundContext).allow, false, JSON.stringify(bad));
+  }
+});

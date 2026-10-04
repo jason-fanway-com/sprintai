@@ -37,7 +37,7 @@ import { runEngineTurn as runCleanEngineTurn } from "./engine/runner.ts";
 import type { OrderForm as EngineOrderForm } from "./engine/form.ts";
 import { googleGeocoder, localityOf } from "./engine/address.ts";
 import { createCheckoutSession, buildEngineCheckoutSessionInput, appendCheckoutLink, type CheckoutLineItemInput } from "./checkout-session.ts";
-import { deliveryForCart, type DeliveryRow } from "../_shared/delivery-store.ts";
+import { claimDeliveryNotice, deliveryForCart, NOTICE_STATUSES, type DeliveryRow } from "../_shared/delivery-store.ts";
 import { providerFor } from "../_shared/delivery-providers.ts";
 import { e164OrNull, isQuoteError } from "../_shared/delivery.ts";
 
@@ -1212,6 +1212,7 @@ export async function handleSystemEvent(
   if (!conversation) return jsonError("Conversation not found", 404);
 
   let message: string;
+  let deliveryNotice: string | null = null; // delivery_update: the status this text announces (guard evidence)
 
   // ── ALLOWED TRANSACTIONAL EXCEPTIONS (lead directive 2026-06-22) ──────────
   // Only payment_confirmed (paid receipt) and order_refunded (refund notice)
@@ -1257,6 +1258,20 @@ export async function handleSystemEvent(
       ? (courier?.tracking_url ? `A courier is booked. Track it here: ${courier.tracking_url}` : "On its way in about 30-45 min")
       : `Ready for pickup in about 10-15 min${closePart}`;
     message = `Payment confirmed!${orderNum}Order${pickup}: ${items}. Total: $${total}. ${readyPart}.`;
+  } else if (system_event === "delivery_update") {
+    // ALLOWED EXCEPTION #3: courier progress on this paid delivery, sent by delivery-webhook on a forward move.
+    // The status is read here, never taken from the caller, and each status is announced once (claimDeliveryNotice).
+    const d = await deliveryForCart(supabase, order_cart_id).catch(() => null);
+    if (!d || !NOTICE_STATUSES.has(d.status)) return jsonResponse({ ok: true, silent: true, skipped: "no announceable delivery status" });
+    if (!(await claimDeliveryNotice(supabase, d, d.status))) return jsonResponse({ ok: true, silent: true, skipped: "already announced" });
+    deliveryNotice = d.status;
+    const who = d.courier_name ? d.courier_name.split(" ")[0] : "your driver";
+    const callAt = shop.phone_number_e164 ? ` at ${shop.phone_number_e164.replace(/^\+1(\d{3})(\d{3})(\d{4})$/, "$1-$2-$3")}` : "";
+    message = d.status === "picked_up"
+      ? `Your ${shop.name} order is on its way with ${who}.${d.tracking_url ? ` Track it: ${d.tracking_url}` : ""}`
+      : d.status === "dropped_off"
+      ? `Your ${shop.name} order was delivered. Enjoy!`
+      : `Sorry, the courier canceled your delivery. Please call ${shop.name}${callAt} about your order.`;
   } else if (system_event === "payment_expired") {
     // KILLED (TCPA/10DLC, lead directive 2026-06-22): a checkout link expiring
     // is NOT a customer action. We never push an unsolicited "your link
@@ -1535,6 +1550,8 @@ export async function handleSystemEvent(
     cartId: order_cart_id,
     cartPaymentStatus: (cartRow.payment_status as string | null) ?? null,
     cartRefundedCents: (cartRow.refunded_cents as number | null) ?? null,
+    deliveryStatus: deliveryNotice,
+    deliveryNoticeClaimed: deliveryNotice !== null,
   };
 
   if (conversation.channel === "sms" && conversation.customer_phone) {
