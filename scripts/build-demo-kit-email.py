@@ -186,7 +186,7 @@ def main() -> None:
     html = render({f"{k}_SRC": f"cid:{cids[k][1:-1]}" for k in pngs})
 
     msg = EmailMessage()
-    msg["Subject"] = f"OrderFare demo kit — Jack's Slice, on {shop['name']} ({phone_spoken(phone)})"
+    msg["Subject"] = f"OrderFare demo kit — {shop['name']} ({phone_spoken(phone)})"
     msg["To"] = args.send
     msg.set_content(
         f"{shop['name']} demo kit. Ordering line: {phone_display(phone)}. "
