@@ -346,7 +346,7 @@ export default function ConversationalAdminChat({ shopId }: Props) {
       <div className="flex items-center justify-between px-3 sm:px-4 py-2.5 sm:py-3 border-b border-gray-200">
         <div className="flex items-center gap-2">
           <Sparkles className="w-4 h-4 text-brand-600" />
-          <h3 className="text-sm font-semibold text-gray-700">Talk to Your Menu</h3>
+          <h3 className="text-sm font-semibold text-gray-700">Talk to your shop</h3>
         </div>
         {messages.length > 0 && (
           <button
@@ -532,7 +532,7 @@ export default function ConversationalAdminChat({ shopId }: Props) {
             onChange={e => setInputValue(e.target.value)}
             placeholder="86 the tuna melt..."
             disabled={isLoading}
-            className="flex-1 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:opacity-50"
+            className="flex-1 min-w-0 px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:opacity-50"
             style={{ minHeight: 44 }}
           />
           <button
