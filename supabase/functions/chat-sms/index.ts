@@ -1255,7 +1255,7 @@ export async function handleSystemEvent(
     // for food that was on its way to them (observed live, orders #11/#12).
     // a booked courier: the tracking link is the only delivery update the customer gets (no third text)
     const readyPart = cartRow.order_type === "delivery"
-      ? (courier?.tracking_url ? `A courier is booked. Track it here: ${courier.tracking_url}` : "On its way in about 30-45 min")
+      ? (courier?.tracking_url ? `A courier is booked. Track it or add drop-off notes here: ${courier.tracking_url}` : "On its way in about 30-45 min")
       : `Ready for pickup in about 10-15 min${closePart}`;
     message = `Payment confirmed!${orderNum}Order${pickup}: ${items}. Total: $${total}. ${readyPart}.`;
   } else if (system_event === "delivery_update") {
