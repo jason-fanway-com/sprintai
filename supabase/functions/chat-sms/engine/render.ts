@@ -16,7 +16,7 @@ export type Info =
   | { kind: "cart"; totals: Totals } | { kind: "item"; item: MenuItem; unit_cents: number; sizes?: Array<{ name: string; cents: number }>; price: boolean; answer?: boolean; in_cart?: boolean }
   | { kind: "eta" } | { kind: "welcome" } | { kind: "got_it" }
   | { kind: "cart_has"; qty: number; name: string } | { kind: "cart_lacks"; name: string }
-  | { kind: "list"; names: string[] } | { kind: "categories"; names: string[] } | { kind: "not_found"; about: string }
+  | { kind: "list"; names: string[]; descs?: Array<string | null> } | { kind: "categories"; names: string[] } | { kind: "not_found"; about: string }
   | { kind: "human" } | { kind: "cancelled" } | { kind: "started_over" } | { kind: "unclear" };
 
 export type Question =
@@ -105,7 +105,7 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
       const [l, item] = lineAndItem(form, menu, q.line_id);
       const g = item?.groups.find((x) => x.id === q.group_id);
       if (!l || !item || !g) return T.unclear();
-      const within = l.slot_candidates[g.id], choices = (within ? g.choices.filter((c) => within.includes(c.id)) : g.choices).map((c) => c.name);
+      const within = l.slot_candidates[g.id], choices = (within ? g.choices.filter((c) => within.includes(c.id)) : g.choices).map((c) => c.name); if (g.kind === "modifier") return T.offerExtras(item.display_name, item.description, g.name.toLowerCase(), g.choices.map((c) => c.delta_cents ? `${c.name} +${dollars(c.delta_cents)}` : c.name));
       return missed(`the ${g.name.toLowerCase()}`) + T.slot(item.display_name, groupPrompt(g.name), choices, count);
     }
     case "line_picks": {
@@ -155,7 +155,7 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
       if (i.totals.lines.length === 0) parts.push(T.cartEmpty());
       else parts.push([T.cartHeader(), ...receiptRows(i.totals).map((r, k) => `${k + 1}) ${r}`), moneyLine(i.totals)].join("\n"));
     } else if (i.kind === "item") {
-      const opts = i.in_cart ? [] : i.item.groups.filter((g) => g.kind === "slot").map((g) => `${title(g.name)}: ${g.choices.map((c) => c.name).slice(0, 6).join(", ")}`); // an item already on the order: its choices were made, do not list them again
+      const opts = i.in_cart ? [] : i.item.groups.filter((g) => g.kind === "slot" || g.ask_mode === "offer_once").map((g) => `${title(g.name)}: ${g.choices.map((c) => c.name).slice(0, 6).join(", ")}`); // an item already on the order: its choices were made, do not list them again
       const sizes = i.sizes ? sortSizes(i.sizes.map((x) => x.name)) : null;
       const money = !i.price ? null : sizes ? sizes.map((n) => `${title(n)} ${dollars(i.sizes!.find((x) => x.name === n)!.cents)}`).join(", ") : dollars(i.unit_cents);
       if (sizes && !i.price && !i.in_cart) opts.unshift(`Sizes: ${sizes.map(title).join(", ")}`);
@@ -165,7 +165,7 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
     else if (i.kind === "got_it") parts.push(T.gotIt());
     else if (i.kind === "cart_has") parts.push(T.cartHas(i.qty, i.name));
     else if (i.kind === "cart_lacks") { parts.push(T.cartLacks(i.name));
-    } else if (i.kind === "list") parts.push(T.listInfo(i.names)); // the template caps long lists and says how many more
+    } else if (i.kind === "list") parts.push(T.listInfo(i.names, i.descs)); // the template caps long lists and says how many more
     else if (i.kind === "categories") parts.push(T.menuCategories(i.names));
     else if (i.kind === "not_found") parts.push(T.notOnMenu(i.about));
     else if (i.kind === "human") parts.push(T.human(voice));

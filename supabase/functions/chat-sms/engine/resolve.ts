@@ -142,9 +142,8 @@ export function matchChoice(span: string, group: MenuGroup, within?: string[]): 
 
 function requiredGroupOpen(line: Line, item: MenuItem): MenuGroup | null {
   for (const g of item.groups) {
-    if (g.kind !== "slot" || line.choices[g.id]) continue;
-    // the compiler decided these are not questions: one possible choice, or a shop default
-    if (g.choices.length === 1) { line.choices[g.id] = g.choices[0].id; continue; }
+    if ((g.kind !== "slot" && g.ask_mode !== "offer_once") || line.choices[g.id]) continue; // offer_once: optional extras, offered once ("any toppings?"). Below, the compiler decided these are not questions: one possible choice, or a shop default
+    if (g.kind === "slot" && g.choices.length === 1) { line.choices[g.id] = g.choices[0].id; continue; }
     if (g.ask_mode === "apply_default" && g.default_choice_id && g.choices.some((c) => c.id === g.default_choice_id)) { line.choices[g.id] = g.default_choice_id; continue; }
     return g;
   }
@@ -165,7 +164,7 @@ function applyCanon(line: Line, menu: Menu): void {
   }
 }
 
-const PLACEMENT = new Set(["half", "whole", "pizza", "side", "left", "right"]), NO_TOPPING = new Set(["plain", "regular", "nothing on it", "no toppings"]), NEGATED = new Set(["skip", "no", "not", "without", "hold", "minus", "except", "nah", "nope"]);
+const AS_IS = new Set(["no", "nope", "nah", "none", "no thanks", "no thank you", "as is", "that way", "like that", "thats fine", "that is fine", "fine", "ok", "okay", "yes", "yeah", "yep", "sure", "good", "thats good", "nothing", "no toppings", "nothing else", "just like that", "its fine", "plain", "regular"]), PLACEMENT = new Set(["half", "whole", "pizza", "side", "left", "right"]), NO_TOPPING = new Set(["plain", "regular", "nothing on it", "no toppings"]), NEGATED = new Set(["skip", "no", "not", "without", "hold", "minus", "except", "nah", "nope"]);
 const SIZE_ONLY = new Set(["small", "medium", "large", "xlarge", "personal", "regular"]);
 function normalizeUnit(u: string): string { return words(u)[0] ?? u; }
 
@@ -200,6 +199,7 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true)
     const rw = words(text); if (rw.length === 1 && SIZE_ONLY.has(rw[0]) && item.facets.size && item.facets.size !== rw[0]) return true; // "not Large" once the row is already the medium: nothing left to do
     line.notes.push(`no ${text}`); return false;
   }
+  const offer = item.groups.find((g) => g.ask_mode === "offer_once" && !line.choices[g.id]); if (offer && answer && AS_IS.has(words(text).join(" "))) { line.choices[offer.id] = "*"; return true; } // "want it like that, or toppings?" "that's fine": offered, nothing added
   if (NO_TOPPING.has(words(text).join(" ")) && item.groups.some((g) => g.kind === "modifier")) return true; // "plain": nothing to add
   // 1. slots: unfilled ones first, and every unfilled slot the answer fits ("beef" fills both of a gyro's
   // duplicate Beef-or-Chicken slots); only then may a filled slot be changed ("make it chicken")
@@ -219,7 +219,7 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true)
   for (const g of item.groups) {
     if (g.kind !== "modifier") continue;
     const m = matchChoice(text, g);
-    if (m.kind === "one") { if (!line.modifiers.includes(m.choice_id)) line.modifiers.push(m.choice_id); delete line.slot_candidates[g.id]; return true; } // the shortlist this answered is spent, or the same question comes back forever (pass 12 #20)
+    if (m.kind === "one") { if (!line.modifiers.includes(m.choice_id)) line.modifiers.push(m.choice_id); delete line.slot_candidates[g.id]; if (g.ask_mode === "offer_once") line.choices[g.id] = "*"; return true; } // the shortlist this answered is spent, or the same question comes back forever (pass 12 #20)
     if (m.kind === "many") { line.slot_candidates[g.id] = m.choice_ids; return true; }
   }
   // 3. a size word that is already the item's own size (derived rows carry size in the name)

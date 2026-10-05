@@ -395,9 +395,8 @@ function buildStep(g: CompileGroup): CompiledStep {
     kind: g.kind,
     ask_mode: askMode,
     prompt_template: promptTemplateFor(g, askMode),
+    // the shop's own order (the caller reads choices by display_order, then id: deterministic); an id sort jumbled "American, Provolone, ..." (2026-10-05)
     choices: g.choices
-      .slice()
-      .sort((a, b) => a.id.localeCompare(b.id))
       .map(c => ({ id: c.id, display: choiceDisplay(c), price_delta_cents: c.price_cents })),
   };
 }

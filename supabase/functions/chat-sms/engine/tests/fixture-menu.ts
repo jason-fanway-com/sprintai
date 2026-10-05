@@ -194,3 +194,16 @@ export const ZIO_EXTRA_LEXICON: LexiconEntry[] = [
 export function zioFixtureMenu() {
   return buildMenu({ version: "zio-v1", items: [...RAW_ITEMS, ...ZIO_EXTRA_ITEMS], lexicon: [...RAW_LEXICON, ...ZIO_EXTRA_LEXICON], shop: { ...SHOP, name: "Zio's" } });
 }
+
+/** A cheesesteak with a required cheese and toppings offered once (Vito's, 2026-10-05). */
+export const STEAK_EXTRA_ITEMS: RawMenuItem[] = [
+  item("css", "Cheesesteak", "Hot Sandwiches", 1199, { display_name: "Cheesesteak Sandwich", description: "Served with fries. Sauce, fried onions" }, [
+    { group_id: "cssCheese", slot_key: null, kind: "slot", ask_mode: "ask", prompt_template: "cheese.ask",
+      choices: [{ id: "chAmerican", display: "American", price_delta_cents: 0 }, { id: "chProvolone", display: "Provolone", price_delta_cents: 0 }] },
+    { group_id: "cssTop", slot_key: null, kind: "modifier", ask_mode: "offer_once", prompt_template: "toppings.ask",
+      choices: [{ id: "tpSweet", display: "Sweet Peppers", price_delta_cents: 0 }, { id: "tpMush", display: "Mushrooms", price_delta_cents: 100 }] },
+  ]),
+];
+export function steakFixtureMenu() {
+  return buildMenu({ version: "steak-v1", items: [...RAW_ITEMS, ...STEAK_EXTRA_ITEMS], lexicon: [...RAW_LEXICON, { term: "cheesesteak sandwich", target_type: "item", target_id: "css" }], shop: SHOP });
+}

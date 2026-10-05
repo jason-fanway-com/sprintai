@@ -129,7 +129,9 @@ export const T = {
   cartHeader: () => `Your order so far:`,
   itemInfo: (name: string, money: string | null, options: string[], description: string | null = null) =>
     `${name}${description ? `: ${description}.` : ""}${money ? ` ${money}.` : description ? "" : "."}${options.length ? ` ${options.join("; ")}.` : ""}`.replace(/^([^.]*)\.\s+Sizes/, "$1. Sizes"),
-  listInfo: (names: string[]) => `Options: ${names.slice(0, 16).join(", ")}${names.length > 16 ? `, and ${names.length - 16} more` : ""}.`, // "OPTIONS" for a 13-flavor slot shows all 13
+  listInfo: (names: string[], descs?: Array<string | null>) => descs ? names.map((n, k) => (descs[k] ? `${n}: ${descs[k]}` : n)).join("\n") // a few items, each with what comes on it
+    : `Options: ${names.slice(0, 16).join(", ")}${names.length > 16 ? `, and ${names.length - 16} more` : ""}.`,
+  offerExtras: (itemName: string, comes: string | null, groupName: string, extras: string[]) => `${itemName}${comes ? `: ${comes.replace(/\.$/, "")}.` : "."} Want it like that, or any ${groupName}? ${extras.join(", ")}.`, // "OPTIONS" for a 13-flavor slot shows all 13
   menuCategories: (cats: string[]) => `Categories: ${cats.join(", ")}. Name an item or a category.`,
   unknownInfo: () => `I can help you order. Name an item or ask about one.`,
   human: (v: Voice) => (v.phone_display ? `You can reach the shop at ${v.phone_display}.` : `Someone from the shop will follow up with you.`),

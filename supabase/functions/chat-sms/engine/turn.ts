@@ -407,7 +407,7 @@ function menuInfo(about: string | null, menu: Menu, price: boolean): Info {
   if (r.kind === "ambiguous") {
     const its = r.ids.map((id) => menu.items.get(id)!), kinds = new Set(its.map((i) => i.facets.kind ?? i.display_name));
     if (kinds.size === 1 && its.every((i) => i.facets.size)) { const first = its.find((i) => i.description) ?? its[0]; return { kind: "item", item: first, unit_cents: first.base_cents, sizes: its.map((i) => ({ name: i.facets.size!, cents: i.base_cents })), price }; } // one pizza in three sizes: describe it once, list the sizes
-    return { kind: "list", names: its.map((i) => i.display_name) };
+    return { kind: "list", names: its.map((i) => i.display_name), descs: its.length <= 5 && its.some((i) => i.description) ? its.map((i) => i.description) : undefined };
   }
   const cat = itemsInCategory(menu, about);
   return cat.length ? { kind: "list", names: cat.map((i) => i.display_name) } : { kind: "not_found", about };
