@@ -90,6 +90,9 @@ interface Proposal {
   category?: string | null;
   duration?: string;
   minutes?: number;
+  group_name?: string;
+  add_choices?: { name: string; price_cents: number }[];
+  remove_choices?: string[];
   pause_message?: string;
   duration_minutes?: number | null;
   special_name?: string;
@@ -248,6 +251,25 @@ const ADMIN_TOOLS = [
         clarification_question: { type: "string" },
         clarification_options: { type: "array", items: { type: "string" } },
         summary: { type: "string", description: "e.g. 'Pause delivery for 1 hour — Pickup still open'" },
+      },
+      required: ["needs_clarification", "summary"],
+    },
+  },
+  {
+    name: "SET_OPTIONS_ON_ITEMS",
+    description: "Add or remove choices in one named option group on SEVERAL items at once: 'we don't offer pickles on any cheesesteak', 'add bacon +$1.50 to the toppings on all burgers'. List every matching item from the real menu. Only items that already have that group are changed; it never creates a group. For a single item use SET_ITEM_OPTIONS.",
+    input_schema: {
+      type: "object",
+      properties: {
+        item_ids: { type: "array", items: { type: "string" }, description: "Every menu item ID the change applies to" },
+        items: { type: "array", items: { type: "string" }, description: "Their names, for the summary" },
+        group_name: { type: "string", description: "The option group's name on those items, e.g. 'Toppings'" },
+        add_choices: { type: "array", items: { type: "object", properties: { name: { type: "string" }, price_cents: { type: "integer", description: "0 if free; never omit" } }, required: ["name", "price_cents"] } },
+        remove_choices: { type: "array", items: { type: "string" }, description: "Exact names of choices to remove" },
+        needs_clarification: { type: "boolean" },
+        clarification_question: { type: "string" },
+        clarification_options: { type: "array", items: { type: "string" } },
+        summary: { type: "string", description: "e.g. 'Remove Pickles from Toppings on 8 cheesesteaks'" },
       },
       required: ["needs_clarification", "summary"],
     },
@@ -610,6 +632,7 @@ CRITICAL RULES — VIOLATING ANY OF THESE IS A BUG:
 4. For RESTORE_ITEM: match against the CURRENTLY 86'D list, not the full menu.
 5. For ADD_SPECIAL: name AND price are required. If either is missing, set needs_clarification=true and ask for the missing field.
 6. For PAUSE_DELIVERY and PAUSE_ORDERING: any length the owner states is duration "minutes" with minutes set ("6 hours" = 360, "an hour and a half" = 90); "for today"/"rest of the day" is rest_of_day; "until I say"/"until further notice" is indefinite. Only if no length is stated, set needs_clarification=true with options: ["1 hour", "Rest of today", "Until I turn it back on"]. When the owner answers one of those options (or any length) after you asked, that answer completes the earlier request — call the same tool again with it.
+5a. A menu change to several items ("no pickles on any cheesesteak", "all burgers", "every hot sandwich") is SET_OPTIONS_ON_ITEMS with every matching item_id; a change to one named item is SET_ITEM_OPTIONS. If the owner's words could mean one item or several, ask.
 6a. "Turn off text ordering", "close the shop", "stop taking orders", "we're closed today" are PAUSE_ORDERING (not PAUSE_DELIVERY). If the owner says what customers should be told, put it in pause_message verbatim.
 7. For QUERY_STATUS: just return the stats; no state change.
 8. For UNDO: no clarification needed — just propose it.
@@ -803,6 +826,17 @@ async function validateProposal(
       return { valid: true };
     }
     case "RESUME_ORDERING": return { valid: true };
+    case "SET_OPTIONS_ON_ITEMS": {
+      if (proposal.needs_clarification) return { valid: true, clarification: makeClarificationCard(proposal) };
+      const ids = proposal.item_ids ?? [];
+      if (ids.length === 0 || ids.some((id) => !menuMap.has(id))) return { valid: false, error: "Some of those items aren't on this shop's menu." };
+      if (!proposal.group_name?.trim()) return { valid: false, error: "Which option group (for example Toppings)?" };
+      if ((proposal.add_choices ?? []).length === 0 && (proposal.remove_choices ?? []).length === 0) return { valid: false, error: "Nothing to add or remove." };
+      for (const c of proposal.add_choices ?? []) {
+        if (!c.name?.trim() || typeof c.price_cents !== "number" || c.price_cents < 0) return { valid: false, error: `"${c.name ?? ""}" needs a name and a price of $0.00 or more.` };
+      }
+      return { valid: true };
+    }
     case "SET_TICKET_DESTINATION": {
       if (proposal.needs_clarification) {
         return { valid: true, clarification: makeClarificationCard(proposal) };
@@ -1388,6 +1422,19 @@ async function executeAction(
           wing_flavors_included: before?.wing_flavors_included ?? null,
           wing_mix_extra: before?.wing_mix_extra ?? null,
         }).eq("id", shopId);
+      } else if (snapType === "options_many") {
+        for (const it of (snap.items ?? []) as Array<{ group_id: string; before: { name: string; price_cents: number }[] }>) {
+          const { data: now } = await supabase.from("option_choices").select("id, name, price_cents").eq("option_group_id", it.group_id);
+          const key = (n: string) => n.trim().toLowerCase();
+          for (const c of (now ?? []) as Array<{ id: string; name: string; price_cents: number }>) {
+            const b = it.before.find((x) => key(x.name) === key(c.name));
+            if (!b) await supabase.from("option_choices").delete().eq("id", c.id);
+            else if (b.price_cents !== c.price_cents) await supabase.from("option_choices").update({ price_cents: b.price_cents }).eq("id", c.id);
+          }
+          for (const [k, b] of it.before.entries()) if (!(now ?? []).some((c: { name: string }) => key(c.name) === key(b.name))) {
+            await supabase.from("option_choices").insert({ option_group_id: it.group_id, name: b.name, price_cents: b.price_cents, owner_edited: true, display_order: k });
+          }
+        }
       } else if (snapType === "item_options") {
         resultMsg = "Option group changes can't be auto-undone yet — edit the item directly to revert.";
         break;
@@ -1409,6 +1456,36 @@ async function executeAction(
 
       beforeSnapshot = { undo_source: lastAction.id, undo_type: snapType, undo_before_snapshot: lastAction.before_snapshot };
       afterSnapshot = { undo_source: lastAction.id, undo_type: snapType, undo_applied: true };
+      break;
+    }
+    case "SET_OPTIONS_ON_ITEMS": {
+      const gname = proposal.group_name!.trim().toLowerCase(), adds = proposal.add_choices ?? [], removes = (proposal.remove_choices ?? []).map((n) => n.trim().toLowerCase());
+      const snaps: Array<{ item_id: string; group_id: string; before: { name: string; price_cents: number }[] }> = [];
+      const changed: string[] = [], skipped: string[] = [];
+      for (const itemId of proposal.item_ids ?? []) {
+        const name = menuMap.get(itemId)?.name ?? itemId;
+        const groups = (await getOptionGroupsForItems(supabase, [itemId])).get(itemId) ?? [];
+        const g = groups.find((x) => x.group.name.trim().toLowerCase() === gname);
+        if (!g) { skipped.push(name); continue; } // never invent a group on an item that has none
+        snaps.push({ item_id: itemId, group_id: g.group.id, before: g.choices.map((c) => ({ name: c.name, price_cents: c.price_cents })) });
+        for (const c of g.choices) if (removes.includes(c.name.trim().toLowerCase())) {
+          await supabase.from("option_choices").delete().eq("id", c.id);
+          logEdit({ table_name: "option_choices", row_id: c.id, before: { name: c.name, price_cents: c.price_cents }, after: null });
+        }
+        for (const a of adds) {
+          const hit = g.choices.find((c) => c.name.trim().toLowerCase() === a.name.trim().toLowerCase());
+          if (hit) await supabase.from("option_choices").update({ price_cents: a.price_cents, owner_edited: true }).eq("id", hit.id);
+          else await supabase.from("option_choices").insert({ option_group_id: g.group.id, name: a.name.trim(), price_cents: a.price_cents, owner_edited: true, display_order: g.choices.length });
+          logEdit({ table_name: "option_choices", row_id: hit?.id ?? null, before: null, after: { name: a.name, price_cents: a.price_cents } });
+        }
+        changed.push(name);
+      }
+      beforeSnapshot = { type: "options_many", group_name: proposal.group_name, items: snaps };
+      afterSnapshot = { type: "options_many", changed, skipped };
+      const what = [adds.length ? `added ${adds.map((a) => a.name).join(", ")}` : "", removes.length ? `removed ${(proposal.remove_choices ?? []).join(", ")}` : ""].filter(Boolean).join(" and ");
+      resultMsg = changed.length
+        ? `Done — ${what} in ${proposal.group_name} on ${changed.length} item${changed.length === 1 ? "" : "s"}: ${changed.join(", ")}.${skipped.length ? ` Skipped (no ${proposal.group_name}): ${skipped.join(", ")}.` : ""}`
+        : `None of those items has a ${proposal.group_name} option, so nothing changed.`;
       break;
     }
     case "SET_ITEM_OPTIONS": {
@@ -1763,7 +1840,7 @@ async function executeAction(
 
   // A menu edit reaches the ordering bot only through the compiled menu (ask_plan, prices, lexicon): recompile now,
   // and say so honestly if that failed (2026-10-05: edits and prices were landing in the tables but not in the bot).
-  if (["SET_ITEM_OPTIONS", "SET_ITEM_FIELDS", "ADD_ITEM", "REMOVE_ITEM", "UNDO"].includes(proposal.intent)) {
+  if (["SET_ITEM_OPTIONS", "SET_OPTIONS_ON_ITEMS", "SET_ITEM_FIELDS", "ADD_ITEM", "REMOVE_ITEM", "UNDO"].includes(proposal.intent)) {
     try {
       const r = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/compile-menu`, {
         method: "POST", headers: { Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`, "Content-Type": "application/json" },
