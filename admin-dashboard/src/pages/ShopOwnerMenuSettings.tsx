@@ -8,6 +8,7 @@ import { useView } from '../lib/ViewContext'
 import MenuBulkEditor, { type MenuItemRow, type OptionGroupWithChoices } from '../components/shop/MenuBulkEditor'
 import OwnerSettingsPanel, { type OwnerShopSettings } from '../components/shop/OwnerSettingsPanel'
 import ConversationalAdminChat from '../components/shop/ConversationalAdminChat'
+import OwnerChatPhone from '../components/shop/OwnerChatPhone'
 
 /**
  * Owner-facing Menu & Settings editor.
@@ -291,8 +292,8 @@ export default function ShopOwnerMenuSettings() {
       </div>
 
       {/* Chat panel — same admin-chat operations registry as the form above */}
-      <div className={`lg:w-[380px] lg:flex-shrink-0 lg:flex lg:flex-col border-t lg:border-t-0 lg:border-l border-gray-200 overflow-hidden ${showChat ? 'flex flex-col' : 'hidden lg:flex'}`} style={{ minHeight: showChat ? 420 : undefined }}>
-        <ConversationalAdminChatWithInvalidate shopId={shop.id} onExecuted={invalidateAll} />
+      <div className={`lg:w-[360px] lg:flex-shrink-0 p-4 lg:pl-0 self-start ${showChat ? 'block' : 'hidden lg:block'}`}>
+        <OwnerChatPhone shopId={shop.id} chat={<ConversationalAdminChatWithInvalidate shopId={shop.id} onExecuted={invalidateAll} />} />
       </div>
     </div>
   )

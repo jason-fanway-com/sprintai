@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useEffectiveTenant } from '../lib/useOwnerTenant'
+import OwnerChatPhone from '../components/shop/OwnerChatPhone'
 
 interface Shop {
   id: string
@@ -107,8 +108,10 @@ export default function ShopChatTranscripts() {
     return 'text-gray-500'
   }
 
+  const chatShopId = shopFilter !== 'all' ? shopFilter : shops?.[0]?.id
   return (
-    <div className="p-8">
+    <div className="p-8 flex flex-col-reverse lg:flex-row gap-6 items-start">
+    <div className="flex-1 min-w-0 w-full">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Shop Chats</h1>
@@ -225,6 +228,12 @@ export default function ShopChatTranscripts() {
           </div>
         </div>
       )}
+    </div>
+    {chatShopId && (
+      <div className="w-full lg:w-[340px] flex-shrink-0">
+        <OwnerChatPhone key={chatShopId} shopId={chatShopId} />
+      </div>
+    )}
     </div>
   )
 }
