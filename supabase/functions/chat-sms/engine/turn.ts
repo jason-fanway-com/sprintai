@@ -49,7 +49,7 @@ export function turn(input: TurnInput): TurnOutput {
   const ledger: LedgerEntry[] = [];
   const t = form0.turn_no;
 
-  // 1. cross-read: two readers of the same message
+  // 1. cross-read: two readers of the same message (see crossread.ts)
   const askedSpans = new Set(form0.omissions.map((o) => o.span));
   const lineQuestionOpen = !!(form0.open && "line_id" in form0.open);
   const batch = normalizeMoveBatch(input.moves, lineQuestionOpen).filter((m) => { // the model never talks about menu items: "We have chicken cheesesteak, but..." is the engine's to say or not
@@ -259,6 +259,7 @@ export function turn(input: TurnInput): TurnOutput {
     const a = form.lines[i], b = form.lines[j], same = (l: Line) => JSON.stringify([l.item_id, l.choices, l.modifiers, l.notes, l.selections ?? null]);
     if (a.item_id && a.status.kind === "complete" && b.status.kind === "complete" && same(a) === same(b)) { a.qty += b.qty; form.lines.splice(j, 1); res.touched.push(a.line_id); ledger.push({ turn: t, event: "lines_merged", data: { into: a.line_id, from: b.line_id } }); }
   }
+  const out86: string[] = []; for (const s of [...form.lines]) { const it = s.item_id ? menu.items.get(s.item_id) : null; if (it && (menu.sold_out?.has(it.id) || (it.derived_from && menu.sold_out?.has(it.derived_from.base_item_id)))) { form.lines.splice(form.lines.indexOf(s), 1); out86.push(it.display_name); ledger.push({ turn: t, event: "sold_out", data: { item_id: it.id } }); } } // 86'd today: never sold
   for (const s of [...form.lines]) { const side = s.item_id ? menu.items.get(s.item_id)! : null, owner = side && form.lines.find((o) => o !== s && o.item_id && menu.items.get(o.item_id)!.includes.includes(side.id)); if (side && owner && !form.omissions.some((o) => o.span === side.display_name)) { form.lines.splice(form.lines.indexOf(s), 1); form.omissions.push({ span: side.display_name, qty: s.qty, declined: false, side_of: menu.items.get(owner.item_id!)!.display_name }); ledger.push({ turn: t, event: "side_included", data: { side: side.id, with: owner.item_id } }); } } // "chicken fingers (with fries), french fries": the included fries, or another order? asked once
   for (const l of form.lines) if (before.get(l.line_id) !== JSON.stringify(l) && !res.touched.includes(l.line_id)) res.touched.push(l.line_id);
   for (const o of form.omissions) if (!o.declined && !o.side_of && form.lines.some((l) => l.item_id && lineMatchesSpan(l, o.span, menu))) { o.declined = true; ledger.push({ turn: t, event: "omission_satisfied", data: { span: o.span } }); } // "want one?" about a turkey that just went on the order: asked and answered
@@ -361,7 +362,7 @@ export function turn(input: TurnInput): TurnOutput {
     if (ok) taught.add(span); ledger.push({ turn: t, event: ok ? "taught_term" : "taught_term_skipped", data: ok ? { span, item_id: it.id } : { span, reason: items.size > 1 ? "several_items" : "sized_row" } });
   }
   if (taught.size) { acks.push({ kind: "gotcha" }); res.talk = null; } // "oh, gotcha" is the whole reaction; the model's "no problem, got it" would double it
-  for (const r of res.removed) { const it = r.item_id ? menu.items.get(r.item_id) : null; if (it) acks.push({ kind: "line_removed", name: it.display_name }); else if (!taught.has(r.span)) declines.push({ code: "dropped_line", span: r.span }); }
+  for (const n of out86) declines.push({ code: "sold_out", span: n }); for (const r of res.removed) { const it = r.item_id ? menu.items.get(r.item_id) : null; if (it) acks.push({ kind: "line_removed", name: it.display_name }); else if (!taught.has(r.span)) declines.push({ code: "dropped_line", span: r.span }); }
 
   let info: Info | null = null;
   if (res.showCart) info = { kind: "cart", totals: totals(form, menu) };

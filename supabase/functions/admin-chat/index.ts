@@ -88,6 +88,8 @@ interface Proposal {
   item_ids?: string[];
   category?: string | null;
   duration?: string;
+  minutes?: number;
+  pause_message?: string;
   duration_minutes?: number | null;
   special_name?: string;
   special_price_cents?: number;
@@ -238,7 +240,8 @@ const ADMIN_TOOLS = [
     input_schema: {
       type: "object",
       properties: {
-        duration: { type: "string", enum: ["30_min", "1_hour", "rest_of_day", "indefinite"], description: "How long to pause" },
+        duration: { type: "string", enum: ["minutes", "30_min", "1_hour", "rest_of_day", "indefinite"], description: "How long to pause. Any stated length (\"6 hours\", \"45 minutes\") is duration \"minutes\" with minutes set." },
+        minutes: { type: "number", description: "With duration \"minutes\": the length in minutes (6 hours = 360)" },
         reason: { type: "string", description: "Reason for the pause" },
         needs_clarification: { type: "boolean", description: "Set true if duration is unclear" },
         clarification_question: { type: "string" },
@@ -247,6 +250,28 @@ const ADMIN_TOOLS = [
       },
       required: ["needs_clarification", "summary"],
     },
+  },
+  {
+    name: "PAUSE_ORDERING",
+    description: "Stop taking text orders (close the shop to ordering) for a while or until turned back on. Customers who text get the pause message instead of the ordering assistant. Use for 'turn off text ordering', 'close the shop', 'stop taking orders', 'we're closed today'.",
+    input_schema: {
+      type: "object",
+      properties: {
+        duration: { type: "string", enum: ["minutes", "rest_of_day", "indefinite"], description: "How long. Any stated length is \"minutes\" with minutes set." },
+        minutes: { type: "number", description: "With duration \"minutes\": the length in minutes" },
+        pause_message: { type: "string", description: "What customers are told, verbatim if the owner said it (e.g. 'Sorry, we're closed for the rest of the day.'). Omit to use the default." },
+        needs_clarification: { type: "boolean", description: "Set true only if the length is unclear" },
+        clarification_question: { type: "string" },
+        clarification_options: { type: "array", items: { type: "string" } },
+        summary: { type: "string", description: "e.g. 'Stop text ordering for the rest of today'" },
+      },
+      required: ["needs_clarification", "summary"],
+    },
+  },
+  {
+    name: "RESUME_ORDERING",
+    description: "Start taking text orders again after a pause ('turn ordering back on', 'we're open again').",
+    input_schema: { type: "object", properties: { summary: { type: "string" }, needs_clarification: { type: "boolean" } }, required: ["summary", "needs_clarification"] },
   },
   {
     name: "RESUME_DELIVERY",
@@ -583,7 +608,8 @@ CRITICAL RULES — VIOLATING ANY OF THESE IS A BUG:
 3. For EIGHTYSIX_ITEM: match against the REAL menu IDs. If ambiguous, set needs_clarification=true and suggest options from the menu. If the customer says just a name like "lox" and it matches exactly one item, use that item_id.
 4. For RESTORE_ITEM: match against the CURRENTLY 86'D list, not the full menu.
 5. For ADD_SPECIAL: name AND price are required. If either is missing, set needs_clarification=true and ask for the missing field.
-6. For PAUSE_DELIVERY: if the customer doesn't specify duration, set needs_clarification=true with options: ["1 hour", "Rest of today", "Until I turn it back on"].
+6. For PAUSE_DELIVERY and PAUSE_ORDERING: any length the owner states is duration "minutes" with minutes set ("6 hours" = 360, "an hour and a half" = 90); "for today"/"rest of the day" is rest_of_day; "until I say"/"until further notice" is indefinite. Only if no length is stated, set needs_clarification=true with options: ["1 hour", "Rest of today", "Until I turn it back on"]. When the owner answers one of those options (or any length) after you asked, that answer completes the earlier request — call the same tool again with it.
+6a. "Turn off text ordering", "close the shop", "stop taking orders", "we're closed today" are PAUSE_ORDERING (not PAUSE_DELIVERY). If the owner says what customers should be told, put it in pause_message verbatim.
 7. For QUERY_STATUS: just return the stats; no state change.
 8. For UNDO: no clarification needed — just propose it.
 9. For SET_TICKET_DESTINATION: if the owner wants order tickets/emails sent to a different address, capture new_email. If no clear email address is given, set needs_clarification=true and ask for it. Never guess an address.
@@ -622,6 +648,21 @@ function getBusinessDate(tz: string): string {
   } catch {
     return new Date().toISOString().slice(0, 10);
   }
+}
+
+/** When a pause ends: minutes from now, the next local midnight (rest of today), or null (until turned back on). */
+function pauseEnd(duration: string | undefined, minutes: number | undefined, tz: string): string | null {
+  const m = duration === "30_min" ? 30 : duration === "1_hour" ? 60 : duration === "minutes" ? Math.round(minutes ?? 0) : 0;
+  if (m > 0) return new Date(Date.now() + m * 60_000).toISOString();
+  if (duration !== "rest_of_day") return null;
+  const [y, mo, d] = getBusinessDate(tz).split("-").map(Number);
+  const now = new Date(), offsetMs = Date.parse(now.toLocaleString("en-US", { timeZone: tz })) - Date.parse(now.toLocaleString("en-US", { timeZone: "UTC" }));
+  return new Date(Date.UTC(y, mo - 1, d + 1) - offsetMs).toISOString();
+}
+function pauseLabel(duration: string | undefined, minutes: number | undefined): string {
+  const m = duration === "30_min" ? 30 : duration === "1_hour" ? 60 : duration === "minutes" ? Math.round(minutes ?? 0) : 0;
+  if (m > 0) return m % 60 === 0 ? `${m / 60} hour${m === 60 ? "" : "s"}` : m > 60 ? `${Math.floor(m / 60)} h ${m % 60} min` : `${m} minutes`;
+  return duration === "rest_of_day" ? "the rest of today" : "until you turn it back on";
 }
 
 async function get86List(supabase: ReturnType<typeof createClient>, shopId: string, businessDate: string): Promise<{ item: MenuItem; override_id: string }[]> {
@@ -753,8 +794,16 @@ async function validateProposal(
         return { valid: true, clarification: makeClarificationCard(proposal) };
       }
       if (!proposal.duration) return { valid: false, error: "Please choose a duration." };
+      if (proposal.duration === "minutes" && !((proposal.minutes ?? 0) > 0)) return { valid: false, error: "How long should delivery be paused?" };
       return { valid: true };
     }
+    case "PAUSE_ORDERING": {
+      if (proposal.needs_clarification) return { valid: true, clarification: makeClarificationCard(proposal) };
+      if (!proposal.duration) return { valid: false, error: "How long should text ordering be off?" };
+      if (proposal.duration === "minutes" && !((proposal.minutes ?? 0) > 0)) return { valid: false, error: "How long should text ordering be off?" };
+      return { valid: true };
+    }
+    case "RESUME_ORDERING": return { valid: true };
     case "SET_TICKET_DESTINATION": {
       if (proposal.needs_clarification) {
         return { valid: true, clarification: makeClarificationCard(proposal) };
@@ -1171,21 +1220,14 @@ async function executeAction(
     }
     case "PAUSE_DELIVERY": {
       const duration = proposal.duration ?? "rest_of_day";
-      let until: string | null = null;
-      let durationMinutes: number | null = null;
-      if (duration === "30_min") durationMinutes = 30;
-      else if (duration === "1_hour") durationMinutes = 60;
-      else if (duration === "rest_of_day") durationMinutes = null; // resets next day
-      else if (duration === "indefinite") durationMinutes = null; // until turned back on
-
-      if (durationMinutes) {
-        until = new Date(Date.now() + durationMinutes * 60_000).toISOString();
-      }
-
+      // every pause has a real end: the ordering bot treats delivery as paused only while delivery_paused_until is in the future
+      // (before 2026-10-05 "rest of today" and "until I turn it back on" saved null and paused nothing)
+      const until = pauseEnd(duration, proposal.minutes, shopTimezone) ?? "9999-12-31T00:00:00Z";
+      const { data: curShop } = await supabase.from("shops").select("delivery_enabled, delivery_paused_until").eq("id", shopId).single();
       beforeSnapshot = {
         type: "delivery_pause",
-        delivery_enabled_before: true,
-        delivery_paused_until_before: null,
+        delivery_enabled_before: curShop?.delivery_enabled ?? true,
+        delivery_paused_until_before: curShop?.delivery_paused_until ?? null,
       };
 
       await supabase.from("shops").update({
@@ -1193,7 +1235,7 @@ async function executeAction(
         delivery_pause_reason: proposal.reason ?? null,
       }).eq("id", shopId);
 
-      const durationLabel = duration === "30_min" ? "30 minutes" : duration === "1_hour" ? "1 hour" : duration === "rest_of_day" ? "the rest of today" : "until you turn it back on";
+      const durationLabel = pauseLabel(duration, proposal.minutes);
       resultMsg = `Done — delivery paused for ${durationLabel}${proposal.reason ? ` (${proposal.reason})` : ""}. Pickup is still open.`;
 
       afterSnapshot = {
@@ -1201,6 +1243,25 @@ async function executeAction(
         delivery_enabled_after: true,
         delivery_paused_until_after: until,
       };
+      break;
+    }
+    case "PAUSE_ORDERING": {
+      const { data: cur } = await supabase.from("shops").select("is_paused, paused_until, pause_message").eq("id", shopId).single();
+      beforeSnapshot = { type: "ordering_pause", is_paused_before: cur?.is_paused ?? false, paused_until_before: cur?.paused_until ?? null, pause_message_before: cur?.pause_message ?? null };
+      const until = pauseEnd(proposal.duration, proposal.minutes, shopTimezone), label = pauseLabel(proposal.duration, proposal.minutes);
+      const message = (proposal.pause_message ?? "").trim() || (proposal.duration === "rest_of_day" ? "Sorry, we're closed for the rest of the day." : "Sorry, we're not taking text orders right now. Please try again later.");
+      await supabase.from("shops").update({ is_paused: true, paused_until: until, pause_message: message }).eq("id", shopId);
+      const { data: after } = await supabase.from("shops").select("is_paused, paused_until").eq("id", shopId).single();
+      afterSnapshot = { type: "ordering_pause", is_paused_after: after?.is_paused ?? null, paused_until_after: after?.paused_until ?? null };
+      resultMsg = after?.is_paused ? `Done — text ordering is off for ${label}. Customers who text will get: "${message}"` : "Couldn't confirm text ordering was turned off — please try again.";
+      break;
+    }
+    case "RESUME_ORDERING": {
+      const { data: cur } = await supabase.from("shops").select("is_paused, paused_until, pause_message").eq("id", shopId).single();
+      beforeSnapshot = { type: "ordering_pause", is_paused_before: cur?.is_paused ?? false, paused_until_before: cur?.paused_until ?? null, pause_message_before: cur?.pause_message ?? null };
+      await supabase.from("shops").update({ is_paused: false, paused_until: null }).eq("id", shopId);
+      afterSnapshot = { type: "ordering_pause", is_paused_after: false };
+      resultMsg = "Done — text ordering is back on.";
       break;
     }
     case "RESUME_DELIVERY": {
@@ -1287,6 +1348,8 @@ async function executeAction(
           delivery_paused_until: untilBefore,
           delivery_pause_reason: null,
         }).eq("id", shopId);
+      } else if (snapType === "ordering_pause") {
+        await supabase.from("shops").update({ is_paused: snap.is_paused_before ?? false, paused_until: snap.paused_until_before ?? null, pause_message: snap.pause_message_before ?? null }).eq("id", shopId);
       } else if (snapType === "delivery_resume") {
         const enabledBefore = snap.delivery_enabled_before ?? true;
         const untilBefore = snap.delivery_paused_until_before ?? null;
@@ -1692,6 +1755,22 @@ async function executeAction(
     undo_token: undoToken,
   });
 
+  // A menu edit reaches the ordering bot only through the compiled menu (ask_plan, prices, lexicon): recompile now,
+  // and say so honestly if that failed (2026-10-05: edits and prices were landing in the tables but not in the bot).
+  if (["SET_ITEM_OPTIONS", "SET_ITEM_FIELDS", "ADD_ITEM", "REMOVE_ITEM", "UNDO"].includes(proposal.intent)) {
+    try {
+      const r = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/compile-menu`, {
+        method: "POST", headers: { Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ shop_id: shopId }),
+      });
+      if (!r.ok) throw new Error(`compile-menu ${r.status}`);
+      await r.text();
+    } catch (e) {
+      console.error("[admin-chat] recompile failed:", e);
+      resultMsg += " (Saved, but the ordering assistant hasn't picked it up yet. Try again in a minute, or tell OrderFare.)";
+    }
+  }
+
   // Build status header
   const fresh86 = await get86List(supabase, shopId, businessDate);
   const freshSpecials = await getActiveSpecials(supabase, shopId, businessDate);
@@ -1956,6 +2035,11 @@ Deno.serve(async (req: Request) => {
         error_message: "Failed to parse confirmation payload as JSON",
       });
       return jsonResponse({ error: "Invalid confirmation payload" }, 400);
+    }
+
+    // a question card ("How long?") carries no action: answer with one of its options instead (older screens sent it as a confirm)
+    if (!proposal.intent && (proposal as { needs_clarification?: boolean }).needs_clarification) {
+      return jsonResponse({ error: "Tap one of the options above, or just type your answer (for example \"6 hours\")." }, 400);
     }
 
     // Load current state (through RLS when shop_owner)

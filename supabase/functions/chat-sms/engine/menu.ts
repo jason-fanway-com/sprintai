@@ -13,7 +13,7 @@ export interface MenuItem { id: string; name: string; display_name: string; desc
 export interface LexiconEntry { term: string; target_type: "item" | "choice" | "category" | string; target_id: string }
 export interface IndexedTerm { words: string[]; wordsSing: string[]; target_id: string; target_type: string }
 
-export interface Menu { version: string; items: Map<string, MenuItem>; /** item terms, longest first */ itemTerms: IndexedTerm[]; categoryTerms: IndexedTerm[]; /** `${base_item_id}|${choice_id}` -> derived item id */ canon: Map<string, string>; /** every lexicon word that names an item, by item id (for "what's left over in the span") */ termWordsByItem: Map<string, Set<string>>; /** every word of every item or category term: the spelling universe a typo is measured against */ vocab: Set<string>; shop: ShopConfig }
+export interface Menu { version: string; items: Map<string, MenuItem>; /** item terms, longest first */ itemTerms: IndexedTerm[]; categoryTerms: IndexedTerm[]; /** `${base_item_id}|${choice_id}` -> derived item id */ canon: Map<string, string>; /** every lexicon word that names an item, by item id (for "what's left over in the span") */ termWordsByItem: Map<string, Set<string>>; /** every word of every item or category term: the spelling universe a typo is measured against */ vocab: Set<string>; shop: ShopConfig; /** item ids sold out (86) today */ sold_out?: Set<string> }
 
 export interface ShopConfig { shop_id: string; name: string; delivery_enabled: boolean; delivery_fee_cents: number; tax_rate_bps: number; service_fee_cents: number; phone_display: string | null; /** field order for asking; data, not code */ ask_order: Array<"fulfillment" | "address" | "items" | "tip" | "confirm"> }
 

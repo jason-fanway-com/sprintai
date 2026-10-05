@@ -117,6 +117,7 @@ export const T = {
     const list = c >= 1 || choices.length <= 5 ? ` ${orList(choices)}?` : ` For example ${choices.slice(0, 3).join(", ")}. Reply OPTIONS to hear them all.`;
     return `${itemName}: ${groupPrompt}?${list}`;
   },
+  soldOut: (name: string) => `Sorry, we're out of ${name} today.`,
   sideIncluded: (side: string, owner: string) => `Do you want the ${side} that come with the ${owner}, or an additional order of ${side}? Reply EXTRA for another order, or NO.`,
   omission: (spans: string[]) => `Did you also want ${orList(spans).replace(" or ", " and ")}? Reply YES or NO.`,
   picks: (itemName: string, remaining: number, total: number, unit: string, flavors: string[], c: number) => {

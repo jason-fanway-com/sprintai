@@ -10,7 +10,7 @@ export type Ack =
   | { kind: "address"; text: string } | { kind: "tip"; cents: number } | { kind: "noted"; notes: string[] } | { kind: "line_progress"; name: string; picks: string[] }
   | { kind: "pending"; items: Array<{ qty: number; span: string }> } | { kind: "gotcha" };
 
-export type Decline = { code: DeclineCode | "dropped_line" | "address_to_pickup" | "tip_zero" | "checkout_failed" | "address_read_as"; span?: string };
+export type Decline = { code: DeclineCode | "dropped_line" | "address_to_pickup" | "tip_zero" | "checkout_failed" | "address_read_as" | "sold_out"; span?: string };
 
 export type Info =
   | { kind: "cart"; totals: Totals } | { kind: "item"; item: MenuItem; unit_cents: number; sizes?: Array<{ name: string; cents: number }>; price: boolean; answer?: boolean; in_cart?: boolean }
@@ -146,7 +146,7 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
 
   const declineText: Partial<Record<Decline["code"], (span?: string) => string>> = {
     no_such_line: (sp) => T.noSuchLine(sp), nothing_to_remove: () => T.nothingToRemove(), address_not_found: (sp) => T.addressNotFound(sp ?? ""), address_out_of_zone: (sp) => T.addressOutOfZone(sp ?? "That address"),
-    dropped_line: (sp) => T.droppedLine(sp ?? ""), address_to_pickup: () => T.addressToPickup(), tip_zero: () => T.tipZero(), tip_out_of_range: () => T.tipOutOfRange(), checkout_failed: () => T.checkoutFailed(), address_read_as: (sp) => T.addressReadAs(sp ?? ""),
+    dropped_line: (sp) => T.droppedLine(sp ?? ""), address_to_pickup: () => T.addressToPickup(), tip_zero: () => T.tipZero(), tip_out_of_range: () => T.tipOutOfRange(), checkout_failed: () => T.checkoutFailed(), address_read_as: (sp) => T.addressReadAs(sp ?? ""), sold_out: (sp) => T.soldOut(sp ?? ""),
   };
   for (const d of plan.declines) { const f = declineText[d.code]; if (f) parts.push(f(d.span)); }
 

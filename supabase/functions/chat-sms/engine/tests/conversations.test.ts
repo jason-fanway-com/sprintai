@@ -1743,3 +1743,12 @@ Deno.test("included side: chicken fingers that come with fries plus 'french frie
     assert(!o.reply.includes("additional order"), "asked once: " + o.reply);
   }
 });
+
+Deno.test("86: an item sold out today is never sold; the customer is told, other items go on", () => {
+  const m86 = { ...menu, sold_out: new Set([IDS.cheeseburger]) };
+  let f = newForm("vitos", "test-v1"); f.fulfillment = "pickup";
+  const o = turn({ form: f, menu: m86, message: "a cheeseburger and garlic knots", moves: [{ kind: "add_line", item_span: "cheeseburger", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "garlic knots", qty: 1, option_spans: [] }], closed: false });
+  assertStringIncludes(o.reply, "out of Cheese Burger today");
+  assert(!o.form.lines.some((l) => l.item_id === IDS.cheeseburger), o.reply);
+  assert(o.form.lines.some((l) => l.span.includes("garlic knots")), o.reply);
+});

@@ -274,6 +274,7 @@ interface Shop {
   email_ticket_recipient:  string | null;
   is_paused:               boolean;
   pause_message:           string | null;
+  paused_until?:           string | null;
   delivery_enabled:         boolean;
   delivery_paused_until:    string | null;
   delivery_pause_reason:    string | null;
@@ -455,6 +456,11 @@ function jsonResponse(data: unknown, status = 200): Response {
 
 function jsonError(message: string, status = 400): Response {
   return jsonResponse({ error: message }, status);
+}
+
+/** Text ordering is paused while is_paused, until paused_until passes (null: until turned back on). */
+function shopPausedNow(shop: { is_paused: boolean; paused_until?: string | null }): boolean {
+  return shop.is_paused === true && (!shop.paused_until || new Date(shop.paused_until) > new Date());
 }
 
 function getBusinessDate(timezone: string): string {
@@ -1738,7 +1744,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       return emptyTwiml();
     }
     shop = shopData as Shop;
-    if (shop.is_paused) {
+    if (shopPausedNow(shop)) {
       await sendSms(supabase, shop.tenant_id ?? "", inboundReplyCtx, replyProvider, toNumber, fromNumber, shop.pause_message ?? "We are not accepting orders right now. Please try again later.");
       return emptyTwiml();
     }
@@ -1828,7 +1834,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
         return jsonResponse({ received: true });
       }
       shop = shopData as Shop;
-      if (shop.is_paused) {
+      if (shopPausedNow(shop)) {
         await sendSms(supabase, shop.tenant_id ?? "", inboundReplyCtx, "telnyx", toNumber, fromNumber, shop.pause_message ?? "We are not accepting orders right now. Please try again later.");
         return jsonResponse({ received: true });
       }
@@ -1872,7 +1878,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       .from("shops").select("*").eq("id", shop_id).single();
     if (!shopData) return jsonError("Shop not found", 404);
     shop = shopData as Shop;
-    if (shop.is_paused) {
+    if (shopPausedNow(shop)) {
       return jsonResponse({ reply: shop.pause_message ?? "We are not accepting orders right now.", cart: [], phase: "greeting", session_id: sessionId });
     }
 
@@ -2477,9 +2483,11 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     const engineProvider = (Deno.env.get("ENGINE_PROVIDER") ?? "anthropic") as "anthropic" | "openrouter";
     const engineKey = engineProvider === "anthropic" ? (Deno.env.get("ANTHROPIC_API_KEY") ?? "") : (Deno.env.get("OPENROUTER_API_KEY") ?? "");
     const courierShop = shop as { delivery_provider?: string | null; formatted_address?: string | null; courier_pickup_phone?: string | null };
+    // items the shop marked sold out (86) today: the engine says so instead of selling them (admin-chat writes these)
+    const { data: eightySix } = await supabase.from("availability_overrides").select("menu_item_id").eq("shop_id", shop.id).eq("business_date", getBusinessDate(shop.timezone ?? "America/New_York"));
     const engineOut = await runCleanEngineTurn(
       {
-        shop: { id: shop.id, tenant_id: shop.tenant_id, name: shop.name, delivery_enabled: shop.delivery_enabled === true, delivery_fee_cents: shop.delivery_fee_cents, tax_rate_bps: shop.tax_rate_bps ?? 0, phone_number_e164: shop.phone_number_e164, latitude: shop.latitude, longitude: shop.longitude, delivery_radius_mi: shop.delivery_radius_mi, delivery_provider: courierShop.delivery_provider ?? "own" },
+        shop: { id: shop.id, tenant_id: shop.tenant_id, name: shop.name, delivery_enabled: shop.delivery_enabled === true && !(shop.delivery_paused_until && new Date(shop.delivery_paused_until) > new Date()), delivery_fee_cents: shop.delivery_fee_cents, tax_rate_bps: shop.tax_rate_bps ?? 0, phone_number_e164: shop.phone_number_e164, latitude: shop.latitude, longitude: shop.longitude, delivery_radius_mi: shop.delivery_radius_mi, delivery_provider: courierShop.delivery_provider ?? "own", sold_out: ((eightySix ?? []) as Array<{ menu_item_id: string }>).map((r) => r.menu_item_id) },
         conversationId: conversation.id as string,
         cart: { id: cart.id, engine_form: cart.engine_form ?? null, test_mode: cart.test_mode, stripe_checkout_session_id: cart.stripe_checkout_session_id, notes: cart.notes },
         message: userMessage,

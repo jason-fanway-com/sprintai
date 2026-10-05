@@ -32,6 +32,8 @@ export interface RunnerShop {
   delivery_radius_mi: number | null;
   /** "own" (flat fee, shop driver) or a courier provider that quotes per address; missing = "own" */
   delivery_provider?: string | null;
+  /** item ids marked sold out (86) for today */
+  sold_out?: string[];
 }
 export interface RunnerCart {
   id: string;
@@ -165,7 +167,7 @@ function choicesFor(menu: Menu, form: OrderForm) {
 
 export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promise<RunnerOutput> {
   const t0 = Date.now();
-  const menu = await loadMenu(deps.supabase, input.shop, deps.serviceFeeCents);
+  const loaded = await loadMenu(deps.supabase, input.shop, deps.serviceFeeCents), menu = input.shop.sold_out?.length ? { ...loaded, sold_out: new Set(input.shop.sold_out) } : loaded; // today's 86 list rides on a per-turn view; the cache stays clean
   const form0: OrderForm = input.cart.engine_form ?? newForm(input.shop.id, menu.version);
   const lines = form0.lines.map((l) => ({ line_id: l.line_id, name: l.item_id ? (menu.items.get(l.item_id)?.display_name ?? l.span) : l.span, qty: l.qty }));
 

@@ -423,6 +423,21 @@ export default function ConversationalAdminChat({ shopId }: Props) {
                         <X className="w-3 h-3" />
                         Cancel
                       </button>
+                      {/* a question card ("How long?") answers with its options; it has no action to confirm (2026-10-05: Confirm sent the bare question and failed "Unknown intent") */}
+                      {msg.confirmationCard!.details?.needs_clarification ? ((msg.confirmationCard!.details.options as string[] | undefined) ?? []).map(opt => (
+                        <button
+                          key={opt}
+                          onClick={() => {
+                            setMessages(prev => prev.map((m, idx) => { if (idx !== i) return m; const { confirmationCard, ...rest } = m; return { ...rest, content: m.confirmationCard!.summary } }))
+                            sendMessage(opt)
+                          }}
+                          disabled={isLoading}
+                          className="px-3 py-1.5 text-xs text-white bg-brand-600 rounded-lg hover:bg-brand-700 transition-colors disabled:opacity-50"
+                          style={{ minHeight: 44 }}
+                        >
+                          {opt}
+                        </button>
+                      )) : (
                       <button
                         onClick={() => confirmAction(msg.confirmationCard!)}
                         disabled={isLoading}
@@ -436,6 +451,7 @@ export default function ConversationalAdminChat({ shopId }: Props) {
                         )}
                         Confirm
                       </button>
+                      )}
                     </div>
                   </div>
                 )}
