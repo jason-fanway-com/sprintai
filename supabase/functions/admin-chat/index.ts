@@ -355,7 +355,7 @@ const ADMIN_TOOLS = [
                   required: ["name", "price_cents"],
                 },
               },
-              delete_choice_ids: { type: "array", items: { type: "string" } },
+              delete_choice_ids: { type: "array", items: { type: "string" }, description: "Choices to REMOVE from this group, by id or exact name (\"we don't offer pickles\" -> [\"Pickles\"]). The choices list is only for choices to add or change; never re-send the whole list." },
             },
             required: ["name", "required", "min_select", "max_select", "choices"],
           },
@@ -1441,14 +1441,21 @@ async function executeAction(
         }
         logEdit({ table_name: "option_groups", row_id: groupId, before: null, after: { name: g.name, required: g.required, min_select: g.min_select, max_select: g.max_select } });
 
-        for (const cid of g.delete_choice_ids ?? []) {
+        // the model rarely has choice ids: a choice named like an existing one is that choice (re-sending a list duplicated every topping, 2026-10-05)
+        let existing = ((await supabase.from("option_choices").select("id, name").eq("option_group_id", groupId)).data ?? []) as Array<{ id: string; name: string }>;
+        const byName = (n: string) => existing.find((e) => e.name.trim().toLowerCase() === n.trim().toLowerCase())?.id;
+        for (const ref of g.delete_choice_ids ?? []) {
+          const cid = existing.some((e) => e.id === ref) ? ref : byName(ref);
+          if (!cid) continue;
           await supabase.from("option_choices").delete().eq("id", cid);
+          existing = existing.filter((e) => e.id !== cid);
           logEdit({ table_name: "option_choices", row_id: cid, before: null, after: null });
         }
         for (const c of g.choices ?? []) {
-          if (c.choice_id) {
-            await supabase.from("option_choices").update({ name: c.name, price_cents: c.price_cents, owner_edited: true }).eq("id", c.choice_id);
-            logEdit({ table_name: "option_choices", row_id: c.choice_id, before: null, after: { name: c.name, price_cents: c.price_cents } });
+          const cid = c.choice_id ?? byName(c.name);
+          if (cid) {
+            await supabase.from("option_choices").update({ name: c.name, price_cents: c.price_cents, owner_edited: true }).eq("id", cid);
+            logEdit({ table_name: "option_choices", row_id: cid, before: null, after: { name: c.name, price_cents: c.price_cents } });
           } else {
             const { data: createdChoice, error: cErr } = await supabase.from("option_choices").insert({
               option_group_id: groupId, name: c.name, price_cents: c.price_cents, owner_edited: true,
@@ -2228,6 +2235,7 @@ Deno.serve(async (req: Request) => {
     }
 
     proposal = {
+      ...(input as Partial<Proposal>), // every field the tool schema defines; the typed list below only normalizes (2026-10-05: minutes, pause_message, delivery_provider were being dropped)
       intent,
       items: input.items as string[] | undefined,
       item_ids: input.item_ids as string[] | undefined,
