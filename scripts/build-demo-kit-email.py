@@ -122,6 +122,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--shop", required=True, help="shop slug, e.g. vitos-pizza")
     ap.add_argument("--send", help="email address to send to (omit to only write files)")
+    ap.add_argument("--cc", help="address to copy on the send")
     ap.add_argument("--account", default="fanway", help="msmtp account")
     ap.add_argument("--outdir", default="/tmp", help="where to write the preview html + pngs")
     args = ap.parse_args()
@@ -188,6 +189,8 @@ def main() -> None:
     msg = EmailMessage()
     msg["Subject"] = f"OrderFare demo kit — {shop['name']} ({phone_spoken(phone)})"
     msg["To"] = args.send
+    if args.cc:
+        msg["Cc"] = args.cc
     msg.set_content(
         f"{shop['name']} demo kit. Ordering line: {phone_display(phone)}. "
         "Open in an HTML mail client to see the QR codes."
@@ -199,8 +202,8 @@ def main() -> None:
         html_part.add_related(png, maintype="image", subtype="png", cid=cids[k],
                               filename=f"{stem}-{k.lower()}.png")
 
-    subprocess.run(["msmtp", "-a", args.account, args.send], input=msg.as_bytes(), check=True)
-    print(f"sent:      {args.send} (account {args.account})")
+    subprocess.run(["msmtp", "-a", args.account, args.send, *([args.cc] if args.cc else [])], input=msg.as_bytes(), check=True)
+    print(f"sent:      {args.send}{' cc ' + args.cc if args.cc else ''} (account {args.account})")
 
 
 if __name__ == "__main__":
