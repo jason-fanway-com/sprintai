@@ -14,7 +14,7 @@ export type PaidBookOutcome =
 
 interface CartRow {
   id: string; shop_id: string; conversation_id: string; order_type: string | null; test_mode: boolean | null;
-  delivery_address: { formatted?: string; lat?: number; lng?: number; notes?: string } | null;
+  delivery_address: { formatted?: string; lat?: number; lng?: number; notes?: string; courier?: string | null } | null;
   cart_json: Array<{ name?: string; quantity?: number; type?: string }> | null;
   subtotal_cents: number | null; driver_tip_cents: number | null; pickup_name: string | null; order_number: number | null;
 }
@@ -38,15 +38,17 @@ export async function bookCourierForPaidCart(
     .eq("id", cart.shop_id).maybeSingle();
   const shop = s as ShopRow | null;
   if (!shop) return { booked: false, reason: "no_shop" };
-  if (!isCourierProvider(shop.delivery_provider)) return { booked: false, reason: "own_driver" };
+  // the courier the order was quoted with wins over the shop's setting at payment time (older carts carry none)
+  const courier = cart.delivery_address?.courier !== undefined ? (cart.delivery_address.courier ?? "own") : shop.delivery_provider;
+  if (!isCourierProvider(courier)) return { booked: false, reason: "own_driver" };
 
   const fail = async (reason: "no_credentials" | "no_address" | "failed", error: string): Promise<PaidBookOutcome> => {
     await raiseIssue(db, shop, cart, error);
     return { booked: false, reason, error };
   };
   const test = cart.test_mode === true || shop.is_test === true; // a test shop can never book a real driver
-  const provider = providerFor(shop.delivery_provider, test);
-  if (!provider) return fail("no_credentials", `${shop.delivery_provider} ${test ? "sandbox" : "live"} credentials are not configured`);
+  const provider = providerFor(courier!, test);
+  if (!provider) return fail("no_credentials", `${courier} ${test ? "sandbox" : "live"} credentials are not configured`);
   const dropAddr = cart.delivery_address?.formatted;
   if (!dropAddr || !shop.formatted_address) return fail("no_address", !dropAddr ? "the cart has no delivery address" : "the shop has no formatted_address");
 

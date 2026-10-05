@@ -287,6 +287,7 @@ export default function ShopOwnerMenuSettings() {
             shopId={shop.id}
             settings={shopSettings ?? null}
             onSaved={invalidateAll}
+            canChangeProvider={isSuperAdmin}
           />
         )}
       </div>

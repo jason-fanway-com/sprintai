@@ -504,19 +504,6 @@ const ADMIN_TOOLS = [
     },
   },
   {
-    name: "SET_DELIVERY_PROVIDER",
-    description: "Choose who delivers this shop's delivery orders: the shop's own drivers (\"own\", flat delivery fee) or Uber (\"uber\", Uber prices each address and sends a courier). This does not turn delivery on or off — that is SET_DELIVERY_ENABLED.",
-    input_schema: {
-      type: "object",
-      properties: {
-        delivery_provider: { type: "string", enum: ["own", "uber"] },
-        needs_clarification: { type: "boolean" },
-        summary: { type: "string", description: "e.g. 'Deliver with Uber instead of shop drivers'" },
-      },
-      required: ["delivery_provider", "needs_clarification", "summary"],
-    },
-  },
-  {
     name: "SET_UPSELL_ENABLED",
     description: "Turn the ordering bot's upsell suggestions on or off for this shop (e.g. offering cream cheese with a bagel, or a drink with a sandwich). When off, the bot takes exactly what the customer asks for and doesn't suggest add-ons.",
     input_schema: {
@@ -648,7 +635,7 @@ CRITICAL RULES — VIOLATING ANY OF THESE IS A BUG:
 13a. For ADD_ITEM: name and price are required and must come verbatim from the owner — never invent either. If category is not given, leave it out (the backend defaults it).
 13b. For REMOVE_ITEM: resolve against the REAL menu, same as EIGHTYSIX_ITEM. If the owner just wants it unavailable for tonight, that's EIGHTYSIX_ITEM, not REMOVE_ITEM — only use REMOVE_ITEM when they clearly mean permanently taking it off the menu.
 14. For SET_STORE_HOURS / SET_DELIVERY_HOURS: every one of mon,tue,wed,thu,fri,sat,sun must be present, each either {"closed":true} or {"closed":false,"open":"HH:MM","close":"HH:MM"}. If the owner only gives some days, set needs_clarification=true and ask about the rest rather than guessing.
-15a. For SET_DELIVERY_PROVIDER: "use Uber", "Uber delivers for us", "switch delivery to Uber" -> uber; "our own drivers", "we deliver ourselves", "stop using Uber" -> own. It only changes who delivers, never whether delivery is offered.
+15a. Who delivers (Uber or the shop's own drivers) is set by OrderFare at onboarding and cannot be changed in this chat. If asked, say to contact OrderFare; for a temporary stop use PAUSE_DELIVERY.
 15. For SET_DELIVERY_ENABLED: this is a PERMANENT on/off switch, not a same-day pause. If the owner says something like "pause delivery" or "turn delivery back on" for today, use PAUSE_DELIVERY/RESUME_DELIVERY instead. Only use SET_DELIVERY_ENABLED for "stop offering delivery" / "start offering delivery" style permanent requests.
 16. For SET_SHOP_INSTRUCTIONS: capture the owner's instructions verbatim into ai_instructions; do not summarize or rewrite their wording.
 17. For SET_WING_POLICY: capture wing_flavors_included and/or wing_mix_extra only from what the owner explicitly states.
@@ -2069,6 +2056,7 @@ Deno.serve(async (req: Request) => {
 
     const results: Array<{ ok: boolean; intent: string; result?: string; error?: string; data?: Record<string, unknown> }> = [];
     for (const raw of form_ops) {
+      if (raw.intent === "SET_DELIVERY_PROVIDER" && !isAdmin) { results.push({ ok: false, intent: raw.intent, error: "Only OrderFare can change who delivers." }); continue; } // a setup decision, not a daily toggle (Jason 2026-10-05)
       const proposal: Proposal = { needs_clarification: false, summary: "", ...raw, intent: raw.intent };
 
       const validation = await validateProposal(proposal, shop_id, businessDate, supabase, menuItems, specials, eightySixList);

@@ -198,7 +198,7 @@ function AddressSection({ shopId, settings, onSet }: { shopId: string; settings:
   )
 }
 
-export default function OwnerSettingsPanel({ shopId, settings, onSaved }: { shopId: string; settings: OwnerShopSettings | null; onSaved: () => void }) {
+export default function OwnerSettingsPanel({ shopId, settings, onSaved, canChangeProvider = false }: { shopId: string; settings: OwnerShopSettings | null; onSaved: () => void; canChangeProvider?: boolean }) {
   const [openHoursDraft, setOpenHoursDraft] = useState<DraftHours>(() => toDraft(settings?.open_hours ?? null))
   const [deliveryHoursDraft, setDeliveryHoursDraft] = useState<DraftHours>(() => toDraft(settings?.delivery_hours ?? null))
   const [deliveryEnabled, setDeliveryEnabled] = useState<boolean>(settings?.delivery_enabled ?? true)
@@ -332,10 +332,12 @@ export default function OwnerSettingsPanel({ shopId, settings, onSaved }: { shop
         )}
         <div className="flex items-center gap-2 text-sm text-gray-600">
           Who delivers
-          {(['own', 'uber'] as const).map(p => (
+          {!canChangeProvider && <span className="font-medium text-gray-800">{deliveryProvider === 'uber' ? 'Uber' : 'Your own drivers'}</span>}
+          {!canChangeProvider && <span className="text-xs text-gray-400">(set by OrderFare)</span>}
+          {canChangeProvider && (['own', 'uber'] as const).map(p => (
             <button
               key={p}
-              onClick={() => setDeliveryProvider(p)}
+              onClick={() => { if (p === 'own' && deliveryProvider !== 'own' && !window.confirm("Switch this shop to its own drivers? Uber will stop delivering its orders, and the shop's flat fee applies. Only do this if the shop has drivers every hour it takes delivery.")) return; setDeliveryProvider(p) }}
               className={`text-xs px-3 py-1 rounded-full border ${deliveryProvider === p ? 'border-green-200 text-green-700 bg-green-50' : 'border-gray-200 text-gray-500 bg-gray-50'}`}
             >
               {p === 'own' ? 'Shop delivery' : 'Uber delivery'}

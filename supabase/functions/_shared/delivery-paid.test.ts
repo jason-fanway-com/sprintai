@@ -77,3 +77,13 @@ Deno.test("a test shop books with sandbox credentials even when the cart is not 
   await bookCourierForPaidCart(vitos.client, "cart_1", (_n, t) => { seen.push(t); return makeFakeProvider({ fee_cents: 725 }); }, NOW);
   assertEquals(seen, [true], "is_test forces the sandbox: a test shop can never send a real driver");
 });
+
+Deno.test("an order books the courier it was quoted with, not the shop's setting at payment time", async () => {
+  const quotedOwn = seed({ cart: { delivery_address: { formatted: "1200 Hamilton St, Allentown, PA 18102, USA", courier: "own" } } }); // shop is uber now
+  const r1 = await bookCourierForPaidCart(quotedOwn.client, "cart_1", () => makeFakeProvider({ fee_cents: 725 }), NOW);
+  assertEquals(r1, { booked: false, reason: "own_driver" });
+  const quotedUber = seed({ cart: { delivery_address: { formatted: "1200 Hamilton St, Allentown, PA 18102, USA", courier: "uber" } }, shop: { delivery_provider: "own" } });
+  const seen: string[] = [];
+  const r2 = await bookCourierForPaidCart(quotedUber.client, "cart_1", (n) => { seen.push(n); return makeFakeProvider({ fee_cents: 725 }); }, NOW);
+  assert(r2.booked, JSON.stringify(r2)); assertEquals(seen, ["uber"]);
+});

@@ -289,7 +289,7 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
     driver_tip_cents: t.tip_cents,
     tax_cents: t.tax_cents,
     order_type: form.fulfillment,
-    delivery_address: form.address && form.address.validated && form.address.zone_ok ? { formatted: form.address.formatted ?? form.address.text } : null,
+    delivery_address: form.address && form.address.validated && form.address.zone_ok ? { formatted: form.address.formatted ?? form.address.text, courier: form.address.delivery_quote_id ? form.address.delivery_courier ?? null : "own" } : null, // the courier this order was quoted with
     ...(form.checkout_session_id ? {} : { phase: form.lines.length > 0 ? "building" : "greeting" }),
   }).eq("id", input.cart.id);
   // 5. the voice: the same facts, said like a person; the draft goes out unchanged on any doubt (see voice.ts)
