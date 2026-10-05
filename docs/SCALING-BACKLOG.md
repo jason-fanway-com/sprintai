@@ -86,3 +86,12 @@ two menu words glued together.
 ---
 
 ## 3. (next item goes here)
+
+## Onboarding: menu walkthrough from a recorded owner conversation (Jason, 2026-10-05)
+The sales rep sits with the owner and walks the menu, recorded in Granola; the transcript is uploaded. Its agenda is the
+compiler's pending `owner_questions` (e.g. "Do customers pick a bread on Hot Sandwiches?") plus any item whose options are
+unclear. Claude turns the transcript into proposed answers and option edits, each confirmed by the rep, never guessed.
+Open item from Vito's/Jack's: side upgrades (sweet potato fries, pierogies, mozzarella sticks, onion rings, side salad)
+on 52 items have no prices ("Upcharge TBD") — resolve with the owner at implementation.
+After go-live the owner keeps editing by talking to the menu in shop chat: "we don't offer long hot peppers on the
+cheesesteak", "only the premium cheeseburger has a temp setting" (admin-chat SET_ITEM_OPTIONS; see the shop-chat work).
