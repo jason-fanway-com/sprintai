@@ -16,7 +16,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 const CHAT_API = "https://openrouter.ai/api/v1/messages";
-const CHAT_MODEL = Deno.env.get("CHAT_MODEL") ?? "deepseek/deepseek-v4-flash";
+// 2026-10-05: deepseek-v4-flash sent half-filled actions and free-text "Done" replies for actions it never took; Haiku 4.5 (~3c/owner message)
+const CHAT_MODEL = Deno.env.get("CHAT_MODEL") ?? "anthropic/claude-haiku-4.5";
 const MAX_RETRIES = 3;
 
 const CORS_HEADERS = {
@@ -793,14 +794,12 @@ async function validateProposal(
       if (proposal.needs_clarification) {
         return { valid: true, clarification: makeClarificationCard(proposal) };
       }
-      if (!proposal.duration) return { valid: false, error: "Please choose a duration." };
-      if (proposal.duration === "minutes" && !((proposal.minutes ?? 0) > 0)) return { valid: false, error: "How long should delivery be paused?" };
+      if (!proposal.duration || (proposal.duration === "minutes" && !((proposal.minutes ?? 0) > 0))) return { valid: true, clarification: makeClarificationCard({ ...proposal, clarification_question: "How long?", clarification_options: ["1 hour", "Rest of today", "Until I turn it back on"] }) }; // a length we did not get: ask with buttons
       return { valid: true };
     }
     case "PAUSE_ORDERING": {
       if (proposal.needs_clarification) return { valid: true, clarification: makeClarificationCard(proposal) };
-      if (!proposal.duration) return { valid: false, error: "How long should text ordering be off?" };
-      if (proposal.duration === "minutes" && !((proposal.minutes ?? 0) > 0)) return { valid: false, error: "How long should text ordering be off?" };
+      if (!proposal.duration || (proposal.duration === "minutes" && !((proposal.minutes ?? 0) > 0))) return { valid: true, clarification: makeClarificationCard({ ...proposal, clarification_question: "How long?", clarification_options: ["1 hour", "Rest of today", "Until I turn it back on"] }) };
       return { valid: true };
     }
     case "RESUME_ORDERING": return { valid: true };
@@ -2176,6 +2175,8 @@ Deno.serve(async (req: Request) => {
         system: systemPrompt,
         messages,
         tools: ADMIN_TOOLS,
+        // every reply is an action (UNKNOWN_OR_OUT_OF_SCOPE covers chat): free text can never claim a change that did not happen
+        tool_choice: { type: "any" },
       }),
     });
 

@@ -89,6 +89,7 @@ export default function ConversationalAdminChat({ shopId }: Props) {
   const [isListening, setIsListening] = useState(false)
   const [statusHeader, setStatusHeader] = useState<StatusHeader | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const recognitionRef = useRef<SpeechRecognition | null>(null)
 
@@ -100,7 +101,9 @@ export default function ConversationalAdminChat({ shopId }: Props) {
   }, [messages, shopId])
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    // scroll only the message list: scrollIntoView also scrolled the whole page down on every message (Jason 2026-10-05)
+    const el = listRef.current
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
   }, [messages])
 
   const clearHistory = () => {
@@ -316,7 +319,7 @@ export default function ConversationalAdminChat({ shopId }: Props) {
   // Fallback: if Web Speech API not available, use input-based dictation
   const nativeDictation = () => {
     // On iOS, the "dictation" inputMode triggers the native keyboard mic
-    inputRef.current?.focus()
+    inputRef.current?.focus({ preventScroll: true }) // focusing scrolls the page down otherwise
   }
 
   return (
@@ -362,7 +365,7 @@ export default function ConversationalAdminChat({ shopId }: Props) {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 min-h-0">
+      <div ref={listRef} className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3 min-h-0">
         {messages.length === 0 && (
           <div className="text-center py-8">
             <MessageSquare className="w-8 h-8 mx-auto mb-3 text-gray-300" />
