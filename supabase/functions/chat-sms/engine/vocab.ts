@@ -69,8 +69,8 @@ export function closedAnswer(form: OrderForm, message: string, menu: Menu): Move
   if (open?.kind === "tip") { const tip = parseTip(message); if (tip) return [{ kind: "answer", field: "tip", value: tip }]; }
   if (open?.kind === "confirm" || open?.kind === "omission") { if (YES.has(n) || (open.kind === "confirm" && LINK.has(n))) return [{ kind: "answer_yes" }]; if (NO.has(n)) return [{ kind: "answer_no" }]; }
   if (open?.kind === "items" && NO.has(n)) return [{ kind: "answer", field: "items_done", value: true }];
-  // "that's it" closes the item list whatever else is open (the open question is asked again after)
-  if (CLOSURE.has(n) && open?.kind === "line_unresolved") return [{ kind: "remove_line", ref: { line_id: open.line_id } }, { kind: "answer", field: "items_done", value: true }];
+  const offerLine = open?.kind === "line_slot" ? form.lines.find((l) => l.line_id === open.line_id) : undefined; if (offerLine?.item_id && open?.kind === "line_slot" && menu.items.get(offerLine.item_id)?.groups.find((g) => g.id === open.group_id)?.ask_mode === "offer_once" && (CLOSURE.has(n) || NO.has(n) || YES.has(n))) return [{ kind: "answer_option", value_span: "as is" }, ...(CLOSURE.has(n) ? [{ kind: "answer", field: "items_done", value: true } as Move] : [])]; // "any toppings?" "that's it": as is, and done
+  if (CLOSURE.has(n) && open?.kind === "line_unresolved") return [{ kind: "remove_line", ref: { line_id: open.line_id } }, { kind: "answer", field: "items_done", value: true }]; // "that's it" closes the item list whatever else is open (the open question is asked again after)
   if (CLOSURE.has(n) && form.lines.length > 0) return [{ kind: "answer", field: "items_done", value: true }];
   if (!open && NO.has(n) && form.lines.length > 0) return [{ kind: "answer", field: "items_done", value: true }];
 

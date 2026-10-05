@@ -1697,17 +1697,17 @@ Deno.test("pass 12 #10: the geocoder tries the shop's own town first, then the c
 Deno.test("offer once: a cheesesteak asks the cheese, says what it comes with, offers toppings once; 'that's fine' or a topping answers it", () => {
   const steak = steakFixtureMenu();
   const say2 = (form: OrderForm, message: string, moves: Move[] = []) => { const closed = closedAnswer(form, message, steak); return turn({ form, menu: steak, message, moves: closed ?? moves, closed: closed !== null }); };
-  for (const [answer, mods] of [["that's fine", 0], ["mushrooms", 1]] as const) {
+  for (const [answer, mods] of [["that's fine", 0], ["mushrooms", 1], ["thats it", 0], ["add mushrooms and sweet peppers", 2]] as const) {
     let f = newForm("vitos", "steak-v1"); f.fulfillment = "pickup";
     let o = say2(f, "a cheesesteak sandwich", [{ kind: "add_line", item_span: "cheesesteak sandwich", qty: 1, option_spans: [] }]);
     assertStringIncludes(o.reply, "Provolone"); f = o.form;
     o = say2(f, "provolone", [{ kind: "answer_option", value_span: "provolone" }]);
     assertStringIncludes(o.reply, "Sauce, fried onions"); assertStringIncludes(o.reply, "Mushrooms +$1.00"); f = o.form;
     o = say2(f, answer, [{ kind: "answer_option", value_span: answer }]); f = o.form;
-    assertEquals(f.lines[0].status.kind, "complete", o.reply);
+    assertEquals(f.lines[0].status.kind, "complete", answer + " => " + o.reply);
     assertEquals(f.lines[0].modifiers.length, mods);
     assertEquals(f.lines[0].notes, []);
     assert(!o.reply.includes("Mushrooms +$1.00"), "offered once, not again: " + o.reply);
-    assertEquals(totals(f, steak).subtotal_cents, 1199 + mods * 100);
+    assertEquals(totals(f, steak).subtotal_cents, 1199 + (mods ? 100 : 0));
   }
 });

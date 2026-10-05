@@ -164,7 +164,7 @@ function applyCanon(line: Line, menu: Menu): void {
   }
 }
 
-const AS_IS = new Set(["no", "nope", "nah", "none", "no thanks", "no thank you", "as is", "that way", "like that", "thats fine", "that is fine", "fine", "ok", "okay", "yes", "yeah", "yep", "sure", "good", "thats good", "nothing", "no toppings", "nothing else", "just like that", "its fine", "plain", "regular"]), PLACEMENT = new Set(["half", "whole", "pizza", "side", "left", "right"]), NO_TOPPING = new Set(["plain", "regular", "nothing on it", "no toppings"]), NEGATED = new Set(["skip", "no", "not", "without", "hold", "minus", "except", "nah", "nope"]);
+const AS_IS = new Set(["no", "nope", "nah", "none", "no thanks", "no thank you", "as is", "that way", "like that", "thats fine", "that is fine", "fine", "ok", "okay", "yes", "yeah", "yep", "sure", "good", "thats good", "nothing", "no toppings", "nothing else", "just like that", "its fine", "plain", "regular", "thats it", "thats all", "that is it", "that is all"]), PLACEMENT = new Set(["half", "whole", "pizza", "side", "left", "right"]), NO_TOPPING = new Set(["plain", "regular", "nothing on it", "no toppings"]), NEGATED = new Set(["skip", "no", "not", "without", "hold", "minus", "except", "nah", "nope"]);
 const SIZE_ONLY = new Set(["small", "medium", "large", "xlarge", "personal", "regular"]);
 function normalizeUnit(u: string): string { return words(u)[0] ?? u; }
 
@@ -199,7 +199,7 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true)
     const rw = words(text); if (rw.length === 1 && SIZE_ONLY.has(rw[0]) && item.facets.size && item.facets.size !== rw[0]) return true; // "not Large" once the row is already the medium: nothing left to do
     line.notes.push(`no ${text}`); return false;
   }
-  const offer = item.groups.find((g) => g.ask_mode === "offer_once" && !line.choices[g.id]); if (offer && answer && AS_IS.has(words(text).join(" "))) { line.choices[offer.id] = "*"; return true; } // "want it like that, or toppings?" "that's fine": offered, nothing added
+  const offer = item.groups.find((g) => g.ask_mode === "offer_once" && !line.choices[g.id]); if (offer && answer && AS_IS.has(words(text).join(" "))) { line.choices[offer.id] = "*"; return true; } if (offer && answer && splitList(text).length > 1) return splitList(text).map((p) => applyHeldSpan(line, item, "?" + p, false)).some(Boolean); // "mushrooms and hot peppers": each extra on its own // "want it like that, or toppings?" "that's fine": offered, nothing added
   if (NO_TOPPING.has(words(text).join(" ")) && item.groups.some((g) => g.kind === "modifier")) return true; // "plain": nothing to add
   // 1. slots: unfilled ones first, and every unfilled slot the answer fits ("beef" fills both of a gyro's
   // duplicate Beef-or-Chicken slots); only then may a filled slot be changed ("make it chicken")
