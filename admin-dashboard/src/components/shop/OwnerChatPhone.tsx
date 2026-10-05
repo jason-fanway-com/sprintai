@@ -13,10 +13,10 @@ export function PhoneFrame({ children }: { children: ReactNode }) {
 
 export default function OwnerChatPhone({ shopId, chat }: { shopId: string; chat?: ReactNode }) {
   return (
-    <div className="bg-white rounded-2xl border border-brand-200 shadow-sm overflow-hidden lg:sticky lg:top-6">
-      <div className="bg-brand-50 border-b border-brand-200 px-4 py-2.5 flex items-center gap-2">
+    <div className="bg-white rounded-2xl border border-brand-100 shadow-sm overflow-hidden lg:sticky lg:top-6">
+      <div className="bg-brand-50 border-b border-brand-100 px-4 py-2.5 flex items-center gap-2">
         <MessageSquare className="w-4 h-4 text-brand-600" />
-        <span className="text-sm font-semibold text-brand-800">Talk to your shop</span>
+        <span className="text-sm font-semibold text-gray-900">Talk to your shop</span>
       </div>
       <div className="px-4 py-2 border-b border-brand-100">
         <p className="text-xs text-gray-600">Change the menu, 86 an item, pause delivery or close for the day. Just say it.</p>
