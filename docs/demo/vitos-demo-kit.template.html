@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <meta name="x-apple-disable-message-reformatting" />
-<title>Sprint — {{SHOP_NAME}} demo kit</title>
+<title>OrderFare — {{SHOP_NAME}} demo kit</title>
 </head>
 <body style="margin:0;padding:0;background:#FFFDF9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#2A3540;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FFFDF9;">
@@ -13,22 +13,22 @@
 
   <!-- header -->
   <tr><td style="background:#17212E;border-radius:0 0 0 0;padding:16px 24px;">
-    <span style="color:#ffffff;font-weight:800;font-size:19px;">Sprint<span style="color:#E8521A;">.</span></span>
+    <span style="color:#ffffff;font-weight:800;font-size:19px;">OrderFare<span style="color:#E8521A;">.</span></span>
     <span style="color:#96A5B4;font-size:13px;padding-left:8px;">Demo kit</span>
   </td></tr>
 
   <!-- intro -->
   <tr><td style="padding:28px 24px 8px;">
     <h1 style="margin:0 0 10px;font-size:24px;line-height:1.25;color:#17212E;font-weight:800;">{{SHOP_NAME}} — your demo kit</h1>
-    <p style="margin:0;font-size:16px;line-height:1.55;color:#687585;">Hi Erin — here's everything for the {{SHOP_NAME}} walkthrough. Three QR codes below, what each one does, and a script to run the whole demo. Scan any code with the phone camera.</p>
+    <p style="margin:0;font-size:16px;line-height:1.55;color:#687585;">Hi Erin — here's everything for the Jack's Slice walkthrough. {{SHOP_NAME}} is our demo shop, and <b style="color:#17212E;">it runs Jack's own menu</b>. When Jack texts it, he's ordering off his own menu. Three QR codes below, what each one does, and a script for the whole demo.</p>
   </td></tr>
 
   <!-- the pitch (condensed) -->
   <tr><td style="padding:24px 24px 8px;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#FFF8F3;border:1px solid #EDE3DA;border-radius:14px;">
       <tr><td style="padding:20px 22px;">
-        <p style="margin:0 0 12px;font-size:15px;line-height:1.55;color:#2A3540;"><b style="color:#17212E;">The pitch in a sentence:</b> Sprint gives you a dedicated text-ordering number. Your customers text it like they'd text a friend. No app to download, no account to create. You keep your customers, your margin, and your name on the sale.</p>
-        <p style="margin:0;font-size:14px;line-height:1.55;color:#687585;"><b style="color:#17212E;">🔑 Key numbers:</b> Aggregators take 15–30% per order. Sprint is $99/mo + $0.99 per order (paid by the customer). On $10,000 in monthly orders: DoorDash keeps ~$2,500. Sprint costs ~$200. That's <b style="color:#16A34A;">$2,300 back in the owner's pocket every month.</b></p>
+        <p style="margin:0 0 12px;font-size:15px;line-height:1.55;color:#2A3540;"><b style="color:#17212E;">The pitch in a sentence:</b> OrderFare gives you a dedicated text-ordering number. Your customers text it like they'd text a friend. No app to download, no account to create. You keep your customers, your margin, and your name on the sale.</p>
+        <p style="margin:0;font-size:14px;line-height:1.55;color:#687585;"><b style="color:#17212E;">🔑 The offer:</b> Jack's would be a <b style="color:#17212E;">design partner</b>: the first <b style="color:#16A34A;">six months are free</b>, and while we're getting it perfect they are our only customer. After that it's $99 a month. The $1.49 per-order fee is paid by the customer, not the shop. Aggregators take 15–30% of every order; on $10,000 a month, DoorDash keeps about $2,500.</p>
       </td></tr>
     </table>
   </td></tr>
@@ -39,7 +39,7 @@
       <tr><td style="padding:24px 22px;" align="center">
         <div style="font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#E8521A;">{{SHOP_NAME}} ordering line</div>
         <div style="margin:10px 0 4px;font-size:30px;font-weight:800;color:#ffffff;letter-spacing:.5px;">{{PHONE_SPOKEN}}</div>
-        <p style="margin:8px 0 18px;font-size:14px;line-height:1.55;color:#96A5B4;">A real carrier number, carrier-approved for business texting. Text it from any phone and the assistant answers — no app, no account, no login. This is the demo you can run standing in someone's shop.</p>
+        <p style="margin:8px 0 18px;font-size:14px;line-height:1.55;color:#96A5B4;">A real phone number. Text it from any phone and the assistant answers — no app, no account, no login. This is the demo you can run standing in someone's shop.</p>
         <a href="{{SMS_URI}}" style="display:inline-block;background:#E8521A;color:#ffffff;font-weight:700;font-size:16px;text-decoration:none;padding:14px 28px;border-radius:10px;">Tap to text {{SHOP_NAME}} →</a>
         <p style="margin:14px 0 0;font-size:12px;color:#7A8B9B;">Hand them your phone, or have them text it from theirs. Either works.</p>
       </td></tr>
@@ -79,7 +79,7 @@
         <h3 style="margin:10px 0 6px;font-size:18px;color:#17212E;font-weight:700;">Add {{SHOP_NAME}} to your contacts</h3>
         <img src="{{QR2_SRC}}" width="220" height="220" alt="Contact card for {{SHOP_NAME}}" style="display:block;margin:12px auto 8px;width:220px;height:220px;border:1px solid #EDE3DA;border-radius:12px;" />
         <div style="font-size:13px;color:#687585;line-height:1.5;">Saves a contact card for <b style="color:#17212E;">{{SHOP_NAME}} · {{PHONE_SPOKEN}}</b></div>
-        <p style="margin:12px 0 0;font-size:14px;line-height:1.5;color:#687585;text-align:left;"><b style="color:#2A3540;">One tap saves the shop.</b> After the first order, Sprint gets the customer to save the shop as a contact. Customers saved as contacts are <b style="color:#E8521A;">6.4× more likely to reorder.</b></p>
+        <p style="margin:12px 0 0;font-size:14px;line-height:1.5;color:#687585;text-align:left;"><b style="color:#2A3540;">One tap saves the shop.</b> After the first order, OrderFare gets the customer to save the shop as a contact. Customers saved as contacts are <b style="color:#E8521A;">6.4× more likely to reorder.</b></p>
       </td></tr>
     </table>
   </td></tr>
@@ -91,7 +91,7 @@
         <h3 style="margin:10px 0 6px;font-size:18px;color:#17212E;font-weight:700;">Talk to the shop as admin</h3>
         <img src="{{QR3_SRC}}" width="220" height="220" alt="Owner dashboard for {{SHOP_NAME}}" style="display:block;margin:12px auto 8px;width:220px;height:220px;border:1px solid #EDE3DA;border-radius:12px;" />
         <div style="font-size:13px;color:#687585;line-height:1.5;word-break:break-all;">Opens <b style="color:#17212E;">{{DASHBOARD_URL}}</b></div>
-        <p style="margin:12px 0 0;font-size:14px;line-height:1.5;color:#687585;text-align:left;"><b style="color:#2A3540;">Show them the dashboard.</b> The owner view where they manage items, mark things sold out, and see orders. "This is your command center. The second you're out of something, tap it and customers can't order it." <b style="color:#C94412;">Needs a Sprint sign-in</b> — log in once on your phone and it stays signed in.</p>
+        <p style="margin:12px 0 0;font-size:14px;line-height:1.5;color:#687585;text-align:left;"><b style="color:#2A3540;">Show them the dashboard.</b> The owner view where they manage items, mark things sold out, and see orders. "This is your command center. The second you're out of something, tap it and customers can't order it." <b style="color:#C94412;">Needs an OrderFare sign-in</b> — log in once on your phone and it stays signed in.</p>
       </td></tr>
     </table>
   </td></tr>
@@ -106,15 +106,17 @@
 
       <p style="margin:0 0 14px;"><b style="color:#17212E;">1. Warm them up.</b> "Let me show you something — your restaurant taking orders by text. Same way customers already text their friends and family. No app to download, no account to create, no password to remember."</p>
 
-      <p style="margin:0 0 14px;"><b style="color:#17212E;">2. Order as a customer.</b> "Text {{PHONE_SPOKEN}} and order a pizza, just like a customer would." Hand them your phone or let them use their own — or have them scan QR 1 above, which opens the same text. Let them order (large cheese, white truffle mushroom, wings). Point out: it understands plain language, confirms line items, remembers past orders ("want the wings again?"), totals the cart, and sends a payment link. <b style="color:#2A3540;">{{SHOP_NAME}} is set to pickup right now</b> — if they ask about delivery, that's a per-shop setting the owner turns on with their own radius.</p>
+      <p style="margin:0 0 14px;"><b style="color:#17212E;">2. Order as a customer.</b> "Text {{PHONE_SPOKEN}} and order, just like your customers would. It's your menu." Hand them your phone or let them use their own, or have them scan QR 1 above. Try: <i>a large Jack's Special, 10 boneless wings and garlic knots, for delivery</i>. Point out: it understands plain language, reads the order back with the total, and sends a payment link. Every order on {{SHOP_NAME}} is a test order: pay with the test card <b style="color:#17212E;">4242 4242 4242 4242</b>, any future date, any 3 digits. Nothing is charged.</p>
 
-      <p style="margin:0 0 14px;"><b style="color:#17212E;">3. Show the dashboard (QR 3).</b> Scan QR 3 above, or just hand them your phone. "This is where you run the shop. See the incoming orders. Mark something sold out. Pause ordering if the kitchen gets slammed. All from your phone."</p>
+      <p style="margin:0 0 14px;"><b style="color:#17212E;">3. Watch it get delivered.</b> For delivery, give a real address near our demo shop in Allentown, such as <b style="color:#17212E;">3300 Hamilton Blvd, Allentown, PA</b>. OrderFare books an Uber courier the moment the order is paid. In demo mode Uber sends a simulated driver, so it arrives in a few minutes instead of half an hour. The customer gets a tracking link, then "on its way" and "delivered" texts, all from the shop's number. "Your drivers, or Uber's. Your choice, and the customer only ever hears from you."</p>
 
-      <p style="margin:0 0 14px;"><b style="color:#17212E;">4. Save the contact (QR 2).</b> "After one order, Sprint gets the customer to save the shop as a contact. That's the whole ballgame — customers with you saved in their phone reorder 6.4× more than customers who find you through an app."</p>
+      <p style="margin:0 0 14px;"><b style="color:#17212E;">4. Show the dashboard (QR 3).</b> Scan QR 3 above, or just hand them your phone. "This is where you run the shop. See the incoming orders. Mark something sold out. Pause ordering if the kitchen gets slammed. All from your phone."</p>
 
-      <p style="margin:0 0 14px;"><b style="color:#17212E;">5. The pitch.</b> "You keep your customers, your margin, and your name on the sale. No aggregator taking 30%. It's AI, so it won't be perfect — but we test every shop before go-live, we show you those tests, and we watch quality every single day. $99 a month. $0.99 an order. No contract. Cancel anytime."</p>
+      <p style="margin:0 0 14px;"><b style="color:#17212E;">5. Save the contact (QR 2).</b> "After one order, OrderFare gets the customer to save the shop as a contact. That's the whole ballgame — customers with you saved in their phone reorder 6.4× more than customers who find you through an app."</p>
 
-      <p style="margin:0;"><b style="color:#17212E;">6. Close.</b> "Want your own line? Let's get you signed up — takes 15 minutes right now." Send them to <a href="https://getsprintai.com/signup-page/" style="color:#E8521A;">getsprintai.com/signup-page/</a> or have them scan the sign-up QR on our main site.</p>
+      <p style="margin:0 0 14px;"><b style="color:#17212E;">6. The pitch.</b> "You keep your customers, your margin, and your name on the sale. No aggregator taking 30%. We want you as a design partner: six months free, and until it works perfectly for you, you're our only customer. We set up your menu, you test it as long as you like, and you only go live when you're happy. After six months it's $99 a month. Your customers pay a $1.49 order fee; you don't. No contract."</p>
+
+      <p style="margin:0;"><b style="color:#17212E;">7. Close.</b> "Want your own line? Let's get you signed up — takes 15 minutes right now." Send them to <a href="https://getsprintai.com/signup-page/" style="color:#E8521A;">getsprintai.com/signup-page/</a> or have them scan the sign-up QR on our main site.</p>
 
       </td></tr>
     </table>
@@ -123,7 +125,7 @@
   <!-- how it works link -->
   <tr><td style="padding:24px 24px 0;">
     <a href="https://getsprintai.com/how-it-works.html" style="display:block;text-align:center;background:#17212E;color:#ffffff;text-decoration:none;font-weight:700;font-size:16px;padding:15px;border-radius:12px;">See how the whole thing works →</a>
-    <p style="margin:12px 0 0;text-align:center;font-size:13px;color:#96A5B4;line-height:1.5;">Sign up today · we schedule onboarding · we deliver the marketing kit (door sticker, counter sign, box stickers, bag inserts) · go live in ~2 weeks · <b style="color:#687585;">$99/mo + $0.99 per order (paid by the customer)</b></p>
+    <p style="margin:12px 0 0;text-align:center;font-size:13px;color:#96A5B4;line-height:1.5;">Sign up today · we schedule onboarding · we deliver the marketing kit (door sticker, counter sign, box stickers, bag inserts) · go live in ~2 weeks · <b style="color:#687585;">Design partners: 6 months free, then $99/mo · $1.49 per order paid by the customer</b></p>
   </td></tr>
 
   <!-- no-token note -->
@@ -136,8 +138,8 @@
   </td></tr>
 
   <tr><td style="padding:30px 24px 40px;text-align:center;color:#96A5B4;font-size:12px;">
-    Sprint — SMS ordering for family-owned restaurants · getsprintai.com<br>
-    <span style="color:#B0BCC8;">Demo by SprintAI. {{SHOP_NAME}} is a demonstration shop, not a live restaurant.</span>
+    OrderFare — text ordering for family-owned restaurants · getsprintai.com<br>
+    <span style="color:#B0BCC8;">Demo by OrderFare. {{SHOP_NAME}} is a demonstration shop, not a live restaurant.</span>
   </td></tr>
 
 </table>
