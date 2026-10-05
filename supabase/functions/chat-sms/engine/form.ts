@@ -81,7 +81,7 @@ export interface OrderForm {
   open: OpenQuestion | null;
   /** how many consecutive turns the same question has been open without progress */
   asked: { key: string | null; count: number };
-  omissions: Array<{ span: string; qty: number; declined: boolean; offer?: boolean }>; // offer: we answered "do you have X?" and asked "want one?"
+  omissions: Array<{ span: string; qty: number; declined: boolean; offer?: boolean; side_of?: string }>; // offer: we answered "do you have X?" and asked "want one?"
   said_robot?: boolean; // the "I'm a robot" line is said once per conversation
   relink?: boolean; // a pay link existed and the order changed: send the updated order and a fresh link together, no second YES
   turn_no: number;

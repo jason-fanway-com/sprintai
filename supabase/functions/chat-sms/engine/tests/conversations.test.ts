@@ -1727,3 +1727,17 @@ Deno.test("usual meaning: 'cheesesteak' confirms the Cheesesteak Sandwich and na
   const pick = say2(f, other, [{ kind: "answer_option", value_span: other }]);
   assertEquals(pick.form.lines[0].item_id, others[0], pick.reply);
 });
+
+Deno.test("included side: chicken fingers that come with fries plus 'french fries' asks the included fries or another order, once", () => {
+  const raw = RAW_ITEMS.map((r) => r.id === "cf5" ? { ...r, meta: { ...(r.meta ?? {}), includes: [IDS.fries] } } : r);
+  const fm = buildMenu({ version: "side-v1", items: raw, lexicon: [...RAW_LEXICON, { term: "chicken fingers with fries", target_type: "item", target_id: "cf5" }], shop: SHOP });
+  const say2 = (form: OrderForm, message: string, moves: Move[] = []) => { const closed = closedAnswer(form, message, fm); return turn({ form, menu: fm, message, moves: closed ?? moves, closed: closed !== null }); };
+  for (const [answer, fries] of [["no", 0], ["extra", 1]] as const) {
+    let f = newForm("vitos", "side-v1"); f.fulfillment = "pickup";
+    let o = say2(f, "chicken fingers with fries and french fries", [{ kind: "add_line", item_span: "chicken fingers with fries", qty: 1, option_spans: [] }, { kind: "add_line", item_span: "french fries", qty: 1, option_spans: [] }]);
+    assertStringIncludes(o.reply, "that come with the Chicken Fingers (5) With French Fries, or an additional order"); f = o.form;
+    o = say2(f, answer); f = o.form;
+    assertEquals(f.lines.filter((l) => l.item_id === IDS.fries || l.span.includes("french fries")).length, fries, o.reply);
+    assert(!o.reply.includes("additional order"), "asked once: " + o.reply);
+  }
+});

@@ -64,8 +64,7 @@ export function turn(input: TurnInput): TurnOutput {
   const moves: Move[] = [];
   const hits = scan(input.message, menu).hits; const mw = words(input.message); const usedHits = new Set<unknown>();
   const upgradeSpan = (m: Move & { kind: "add_line" }): Move & { kind: "add_line" } => {
-    // "bagel" + ["plain cream cheese"] when the message contains the unique term
-    // "bagel with plain cream cheese": the longer term names the item
+    // "bagel" + ["plain cream cheese"] when the message contains the unique term "bagel with plain cream cheese": the longer term names the item
     const sw = words(m.item_span), ow = m.option_spans.flatMap((o) => words(o)), fits = hits.filter((x) => !usedHits.has(x) && x.item_ids.length === 1 && x.termWords.length > sw.length && sw.every((w) => x.termWords.includes(w)));
     const h = fits.find((x) => ow.length > 0 && ow.every((w) => x.termWords.includes(w))) ?? fits.find((x) => !x.termWords.some((w) => SIZE_WORDS.has(w) && ow.some((o) => SIZE_WORDS.has(o) && o !== w))); // "taco pizza"+["small"] -> the "small taco pizza" mention; never "large jacks special" for the add that said medium
     const standsAlone = (from: number): boolean => { const i = findWordRun(mw, sw, from); return i >= 0 && ((h && (i + sw.length <= h.start || i >= h.end)) || standsAlone(i + 1)); };
@@ -80,8 +79,7 @@ export function turn(input: TurnInput): TurnOutput {
   // three unknown "grilled chicken sandwiches" and then three real names: one name per unknown line, in order; a fourth name is a new line, never a fourth answer to the first
   const sameSpanUnresolved = focus?.status.kind === "unresolved" ? form0.lines.filter((l) => l.status.kind === "unresolved" && l.span === focus.span) : []; let replaced = 0;
   const focusRemoved = !!focus && batch.some((x) => x.kind === "remove_line" && ("line_id" in x.ref ? x.ref.line_id === focus.line_id : "span" in x.ref && lineMatchesSpan(focus, x.ref.span, menu)));
-  // a rejected add whose item word was invented ("pizza") but whose option words, or the item span's own
-  // verbatim words ("plain" out of "plain pizza"), answer the open line question keeps that answer
+  // a rejected add whose item word was invented ("pizza") but whose option words, or the item span's own verbatim words ("plain" out of "plain pizza"), answer the open line question keeps that answer
   if (focus) for (const r of rec.rejected) {
     if (r.move.kind !== "add_line") continue;
     const itemVerbatim = words(r.move.item_span).filter((w) => mw.includes(w)).join(" ");
@@ -263,8 +261,9 @@ export function turn(input: TurnInput): TurnOutput {
     const a = form.lines[i], b = form.lines[j], same = (l: Line) => JSON.stringify([l.item_id, l.choices, l.modifiers, l.notes, l.selections ?? null]);
     if (a.item_id && a.status.kind === "complete" && b.status.kind === "complete" && same(a) === same(b)) { a.qty += b.qty; form.lines.splice(j, 1); res.touched.push(a.line_id); ledger.push({ turn: t, event: "lines_merged", data: { into: a.line_id, from: b.line_id } }); }
   }
+  for (const s of [...form.lines]) { const side = s.item_id ? menu.items.get(s.item_id)! : null, owner = side && form.lines.find((o) => o !== s && o.item_id && menu.items.get(o.item_id)!.includes.includes(side.id)); if (side && owner && !form.omissions.some((o) => o.span === side.display_name)) { form.lines.splice(form.lines.indexOf(s), 1); form.omissions.push({ span: side.display_name, qty: s.qty, declined: false, side_of: menu.items.get(owner.item_id!)!.display_name }); ledger.push({ turn: t, event: "side_included", data: { side: side.id, with: owner.item_id } }); } } // "chicken fingers (with fries), french fries": the included fries, or another order? asked once
   for (const l of form.lines) if (before.get(l.line_id) !== JSON.stringify(l) && !res.touched.includes(l.line_id)) res.touched.push(l.line_id);
-  for (const o of form.omissions) if (!o.declined && form.lines.some((l) => l.item_id && lineMatchesSpan(l, o.span, menu))) { o.declined = true; ledger.push({ turn: t, event: "omission_satisfied", data: { span: o.span } }); } // "want one?" about a turkey that just went on the order: asked and answered
+  for (const o of form.omissions) if (!o.declined && !o.side_of && form.lines.some((l) => l.item_id && lineMatchesSpan(l, o.span, menu))) { o.declined = true; ledger.push({ turn: t, event: "omission_satisfied", data: { span: o.span } }); } // "want one?" about a turkey that just went on the order: asked and answered
 
   // 5. omissions: an item the second reader saw and the first did not act on. In a conversation-only message a lone uncounted word ("my house") is not an order; a multi-word name or a counted mention is.
   const remarkOnly = moves.length > 0 && moves.every((m) => m.kind === "talk" || m.kind === "ask_menu" || m.kind === "control"), strong = (om: { span: string; qty: number }) => om.qty > 1 || contentWords(om.span).length >= 2;
