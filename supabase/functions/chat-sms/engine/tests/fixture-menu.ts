@@ -197,7 +197,7 @@ export function zioFixtureMenu() {
 
 /** A cheesesteak with a required cheese and toppings offered once (Vito's, 2026-10-05). */
 export const STEAK_EXTRA_ITEMS: RawMenuItem[] = [
-  item("css", "Cheesesteak", "Hot Sandwiches", 1199, { display_name: "Cheesesteak Sandwich", description: "Served with fries. Sauce, fried onions" }, [
+  item("css", "Cheesesteak", "Hot Sandwiches", 1199, { display_name: "Cheesesteak Sandwich", description: "Served with fries. Sauce, fried onions", meta: { primary_for: ["cheesesteak", "cheese steak"] } }, [
     { group_id: "cssCheese", slot_key: null, kind: "slot", ask_mode: "ask", prompt_template: "cheese.ask",
       choices: [{ id: "chAmerican", display: "American", price_delta_cents: 0 }, { id: "chProvolone", display: "Provolone", price_delta_cents: 0 }] },
     { group_id: "cssTop", slot_key: null, kind: "modifier", ask_mode: "offer_once", prompt_template: "toppings.ask",
@@ -205,5 +205,5 @@ export const STEAK_EXTRA_ITEMS: RawMenuItem[] = [
   ]),
 ];
 export function steakFixtureMenu() {
-  return buildMenu({ version: "steak-v1", items: [...RAW_ITEMS, ...STEAK_EXTRA_ITEMS], lexicon: [...RAW_LEXICON, { term: "cheesesteak sandwich", target_type: "item", target_id: "css" }], shop: SHOP });
+  return buildMenu({ version: "steak-v1", items: [...RAW_ITEMS, ...STEAK_EXTRA_ITEMS], lexicon: [...RAW_LEXICON, { term: "cheesesteak sandwich", target_type: "item", target_id: "css" }, { term: "cheesesteak", target_type: "item", target_id: "css" }], shop: SHOP });
 }

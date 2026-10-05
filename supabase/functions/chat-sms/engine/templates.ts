@@ -110,6 +110,7 @@ export const T = {
   },
   whatSize: (name: string, sizes: string[]) => `What size ${name}? ${orList(sizes.map(title))}?`,
   whichOne: (names: string[]) => `Which one?\n${numbered(names)}`,
+  meanPrimary: (said: string, usual: string, others: string[]) => `You said ${said}, so I want to make sure you mean the ${usual}. We also have the ${orList(others)}. Reply YES for the ${usual}, or tell me which one.`,
   whichOneMore: (shown: number, total: number) => `Reply a number, or say more of the name. (${shown} of ${total} shown)`,
   slot: (itemName: string, groupPrompt: string, choices: string[], c: number) => {
     if (c >= 2) return `${itemName}: ${groupPrompt}? Reply a number.\n${numbered(choices)}`; // third time: numbers, the one answer nothing can misread

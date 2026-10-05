@@ -68,7 +68,8 @@ export function renderQuestion(q: OpenQuestion, count: number, form: OrderForm, 
     case "line_ambiguous": {
       const l = form.lines.find((x) => x.line_id === q.line_id);
       if (!l || l.status.kind !== "ambiguous") return T.unclear();
-      const cands = l.status.candidates.map((id) => menu.items.get(id)!).filter(Boolean);
+      const cands = l.status.candidates.map((id) => menu.items.get(id)!).filter(Boolean), prim = cands.filter((c) => c.primary_for.includes(words(l.span).join(" ")));
+      if (prim.length === 1 && count < 2) return T.meanPrimary(l.span, prim[0].display_name, cands.filter((c) => c !== prim[0]).map((c) => c.display_name));
       const facet = count >= 2 ? "list" : q.facet;
       const asked = Math.max(count, l.asks ?? 0);
       const listAll = () => T.whichOne(cands.slice(0, 8).map((c) => c.display_name)) + (cands.length > 8 ? `\n${T.whichOneMore(8, cands.length)}` : "");

@@ -1711,3 +1711,19 @@ Deno.test("offer once: a cheesesteak asks the cheese, says what it comes with, o
     assertEquals(totals(f, steak).subtotal_cents, 1199 + (mods ? 100 : 0));
   }
 });
+
+Deno.test("usual meaning: 'cheesesteak' confirms the Cheesesteak Sandwich and names the others; YES takes it, another name takes that", () => {
+  const steak = steakFixtureMenu();
+  const say2 = (form: OrderForm, message: string, moves: Move[] = []) => { const closed = closedAnswer(form, message, steak); return turn({ form, menu: steak, message, moves: closed ?? moves, closed: closed !== null }); };
+  let f = newForm("vitos", "steak-v1"); f.fulfillment = "pickup";
+  let o = say2(f, "a cheesesteak", [{ kind: "add_line", item_span: "cheesesteak", qty: 1, option_spans: [] }]);
+  assertStringIncludes(o.reply, "make sure you mean the Cheesesteak Sandwich"); f = o.form;
+  const others = (f.lines[0].status as { candidates: string[] }).candidates.filter((id) => id !== "css");
+  assert(others.length >= 1, o.reply);
+  for (const id of others) assertStringIncludes(o.reply, steak.items.get(id)!.display_name);
+  const yes = say2(f, "yes");
+  assertEquals(yes.form.lines[0].item_id, "css", yes.reply); assertStringIncludes(yes.reply, "Provolone");
+  const other = steak.items.get(others[0])!.display_name;
+  const pick = say2(f, other, [{ kind: "answer_option", value_span: other }]);
+  assertEquals(pick.form.lines[0].item_id, others[0], pick.reply);
+});

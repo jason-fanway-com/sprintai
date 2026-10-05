@@ -1,6 +1,4 @@
-// vocab.ts — closed-vocabulary answers that never need a model. A match is the
-// WHOLE normalized message equal to an entry (or an anchored number). No
-// substring matching, no intent guessing. Anything else goes to interpret.ts.
+// vocab.ts — closed-vocabulary answers that never need a model. A match is the WHOLE normalized message equal to an entry (or an anchored number). No substring matching, no intent guessing. Anything else goes to interpret.ts.
 import { normalize, optionWords, words, splitList } from "./normalize.ts";
 import type { Move, OrderForm, Tip } from "./form.ts";
 import type { Menu } from "./menu.ts";
@@ -90,6 +88,7 @@ export function closedAnswer(form: OrderForm, message: string, menu: Menu): Move
       if (pick) return [{ kind: "answer_option", value_span: pick.name }];
     }
     if (line && open.kind === "line_ambiguous" && line.status.kind === "ambiguous") {
+      const usual = line.status.candidates.map((id) => menu.items.get(id)).filter((i) => i?.primary_for.includes(words(line.span).join(" "))); if (YES.has(n) && usual.length === 1) return [{ kind: "answer_option", value_span: usual[0]!.display_name }]; // "the Cheesesteak Sandwich, right?" "yes"
       if (EACH.includes(n) || EACH.includes(n.replace(/ (kind|please)$/, ""))) { // one line per kind, each to be sized or completed in turn
         const kinds = [...new Set(line.status.candidates.map((id) => menu.items.get(id)?.facets.kind ?? menu.items.get(id)?.display_name ?? id))];
         return [{ kind: "split_line", line_id: line.line_id, parts: kinds.map((k) => ({ span: k, qty: 1 })) }];
