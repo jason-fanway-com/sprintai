@@ -1726,6 +1726,8 @@ Deno.test("usual meaning: 'cheesesteak' confirms the Cheesesteak Sandwich and na
   const other = steak.items.get(others[0])!.display_name;
   const pick = say2(f, other, [{ kind: "answer_option", value_span: other }]);
   assertEquals(pick.form.lines[0].item_id, others[0], pick.reply);
+  const no = say2(f, "no");
+  assertEquals(no.form.lines.length, 1, "'no' never drops the line: " + no.reply); assertStringIncludes(no.reply, "Which one?");
 });
 
 Deno.test("included side: chicken fingers that come with fries plus 'french fries' asks the included fries or another order, once", () => {

@@ -76,7 +76,8 @@ export function closedAnswer(form: OrderForm, message: string, menu: Menu): Move
   const digit = DIGIT_RE.exec(n)?.[1];
   if (digit && (open?.kind === "line_ref" || open?.kind === "line_ambiguous")) return [{ kind: "answer_option", value_span: digit }];
   if (open?.kind === "line_slot" || open?.kind === "line_ambiguous" || open?.kind === "line_unresolved" || open?.kind === "line_picks") {
-    if (SKIP.has(n)) return [{ kind: "remove_line", ref: { line_id: open.line_id } }];
+    const amb = open.kind === "line_ambiguous" ? form.lines.find((l) => l.line_id === open.line_id) : undefined, usualAsked = !!amb && amb.status.kind === "ambiguous" && amb.status.candidates.some((id) => menu.items.get(id)?.primary_for.includes(words(amb.span).join(" "))) && form.asked.count < 1;
+    if (usualAsked && PLAIN_NO.has(n)) return []; else if (SKIP.has(n)) return [{ kind: "remove_line", ref: { line_id: open.line_id } }]; // "the Cheesesteak Sandwich, right?" "no": not that one, so show them all (never drop the line)
     const line = form.lines.find((l) => l.line_id === open.line_id);
     if (line && open.kind === "line_slot" && line.item_id) {
       const g = menu.items.get(line.item_id)?.groups.find((x) => x.id === open.group_id);

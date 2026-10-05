@@ -1,6 +1,5 @@
 import { asksPrice, asksHave, asksWait, saysThanks, EACH, isQuestion, LINK } from "./vocab.ts";
-// turn.ts — one conversational turn as a pure function.
-//   (form, menu, message, moves) -> (form', ledger, plan, reply)
+// turn.ts — one conversational turn as a pure function: (form, menu, message, moves) -> (form', ledger, plan, reply)
 import { apply, normalizeMoveBatch, type LedgerEntry, type Line, type LineMatcher, type Move, type OpenQuestion, type OrderForm, type LineRef } from "./form.ts";
 import type { Menu } from "./menu.ts";
 import { reconcile, scan } from "./crossread.ts";
@@ -227,8 +226,7 @@ export function turn(input: TurnInput): TurnOutput {
   }
 
   const targetOf = (ref: LineRef) => "line_id" in ref ? form0.lines.find((l) => l.line_id === ref.line_id) : "span" in ref ? form0.lines.find((l) => lineMatchesSpan(l, ref.span, menu)) : form0.lines.length === 1 ? form0.lines[0] : undefined;
-  // 2. a change_line that changes nothing is the model pointing at a line: beside an add in the same
-  // batch ("actually pepperoni not cheese") that is a replacement; on its own it is nothing
+  // 2. a change_line that changes nothing is the model pointing at a line: beside an add in the same batch ("actually pepperoni not cheese") that is a replacement; on its own it is nothing
   for (let i = moves.length - 1; i >= 0; i--) {
     const m = moves[i]; if (m.kind !== "change_line" || m.qty != null || m.add_option_spans?.length || m.remove_option_spans?.length) continue;
     const target = targetOf(m.ref);
