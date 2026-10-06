@@ -229,7 +229,7 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true)
     const sib = [...menuRef.items.values()].find((i) => i.orderable && i.category === item.category && i.facets.kind === item.facets.kind && i.facets.size === sw[0]);
     if (sib) { line.item_id = sib.id; line.choices = {}; line.modifiers = []; return true; }
   }
-  const own = ownWords(item);
+  const own = ownWords(item); const alt = resolveSpan(`${item.display_name} ${text}`, menuRef), si = alt.kind === "item" ? menuRef.items.get(alt.id) : undefined; if (si && si.id !== item.id && si.orderable && si.category === item.category && contentWords(item.display_name).every((w) => si.words.some((x) => sameWord(x, w)))) { line.item_id = si.id; line.choices = {}; line.modifiers = []; return true; } // "Cooper Cheese Steak" + "chicken": the row the menu names for both ("Cooper Chicken Cheese Steak"), like the size sibling above
   if (sw.every((w) => own.has(w) || own.has(singular(w)))) return true; // restating the item name or size
   if (sw.every((w) => SIZE_ONLY.has(w))) return false; // a size on an item that has no sizes: not an instruction
   if (mayNote && !answer && !line.notes.includes(text)) line.notes.push(text); // said twice is one note; an unreadable answer to the slot we asked is a re-ask, never a kitchen note
