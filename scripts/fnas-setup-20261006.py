@@ -27,6 +27,10 @@ for gid in swap:
 # imported before the importer set kind: optional add-on groups defaulted to slot and were blocked
 for it in items:
     req("PATCH", f"rest/v1/option_groups?menu_item_id=eq.{it['id']}&required=eq.false&kind=eq.slot", {"kind": "modifier"})
+req("POST", "functions/v1/compile-menu", {"shop_id": SHOP}, prefer="return=representation")
+# the compiler asks whether Entrees without a side slot pick one: the menu says the pastas come with garlic bread & side salad, no choice
+req("PATCH", f"rest/v1/owner_questions?menu_id=eq.{menu}&scope_id=eq.Entrees&slot_key=eq.side&status=eq.pending",
+    {"status": "answered", "asked_via": "owner_direct", "answer": {"exists": False, "note": "Menu 2026-10-06: the pastas and baskets list their sides; only the two steaks and the ragu offer a choice."}})
 rep = req("POST", "functions/v1/compile-menu", {"shop_id": SHOP}, prefer="return=representation")
 print("invariants:", [(i["invariant"], i["pass"]) for i in rep.get("invariants", [])])
 print("blocked:", [b["name"] for b in e2e.get(f"menu_items?menu_id=eq.{menu}&active=eq.true&bot_state=eq.blocked&select=name")])
