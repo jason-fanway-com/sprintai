@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """fnas-setup-20261006 — FNA's Grille (first real customer, Jason 2026-10-06): after the menu CSV
-(menu-pipeline/fixtures/fnas-grille-menu.csv) is imported, make the chips swap a single choice
+(menu-pipeline/fixtures/fnas-grille-menu.csv) is imported, mark optional add-ons as modifiers, make the chips swap a single choice
 (fries OR tots, not both) and compile. Prints invariants, blocked items and pending owner questions.
 usage: fnas-setup-20261006.py [--apply]"""
 import json, os, sys, urllib.request
@@ -24,6 +24,9 @@ print(f"{len(items)} items; {len(swap)} chips-swap group(s) to set max_select=1"
 if "--apply" not in sys.argv: sys.exit(0)
 for gid in swap:
     req("PATCH", f"rest/v1/option_groups?id=eq.{gid}", {"max_select": 1})
+# imported before the importer set kind: optional add-on groups defaulted to slot and were blocked
+for it in items:
+    req("PATCH", f"rest/v1/option_groups?menu_item_id=eq.{it['id']}&required=eq.false&kind=eq.slot", {"kind": "modifier"})
 rep = req("POST", "functions/v1/compile-menu", {"shop_id": SHOP}, prefer="return=representation")
 print("invariants:", [(i["invariant"], i["pass"]) for i in rep.get("invariants", [])])
 print("blocked:", [b["name"] for b in e2e.get(f"menu_items?menu_id=eq.{menu}&active=eq.true&bot_state=eq.blocked&select=name")])

@@ -81,6 +81,9 @@ export async function syncGroups(
       const groupRow = {
         menu_item_id: itemId, name: g.name, required: g.required,
         min_select: g.minSelect, max_select: g.maxSelect,
+        // An optional add-on is a modifier; left to the column default it
+        // becomes a slot with min_select 0, which the compiler blocks.
+        kind: g.required ? "slot" : "modifier",
         display_order: g.displayOrder, import_key: g.importKey,
       };
       if (groupId) {
