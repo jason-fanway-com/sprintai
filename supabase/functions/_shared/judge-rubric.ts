@@ -17,6 +17,7 @@
  */
 
 import { extractLlmJson } from "./llm-json.ts";
+import { SERVICE_FEE_CENTS } from "./fees.ts";
 
 export const RUBRIC_VERSION = "rubric-v1.1.0";
 
@@ -110,10 +111,10 @@ message id(s) that triggered it. Cite real message ids from the transcript.
   cart items appear to imply a different total. Mid-conversation quotes (e.g.
   listing item prices while still building the cart) are NOT a stated total.
   When the assistant DOES state a final total, compare it against:
-  (sum of all cart item prices) + $0.99 service fee + delivery fee (if the
-  order is for delivery). IMPORTANT: SprintAI adds a flat $0.99 service fee to
-  EVERY order. If the bot quotes menu_price + $0.99 (e.g. "$12.99" for a
-  $12.00 item) and explicitly mentions the service fee, the price is CORRECT —
+  (sum of all cart item prices) + the service fee + delivery fee (if the
+  order is for delivery). IMPORTANT: OrderFare adds a flat service fee to
+  EVERY order (the amount is in PLATFORM FACTS). If the bot quotes menu_price + that fee
+  and explicitly mentions the service fee, the price is CORRECT —
   do NOT flag as wrong_total. Only flag if the quoted total differs from the
   ground-truth calculation above. A single ITEM price that mismatches the menu
   is invented_item, NOT wrong_total — wrong_total is reserved for a
@@ -251,9 +252,9 @@ export function assembleJudgePrompt(
     )
     .join("\n");
 
-  const serviceFee = ground.service_fee_cents ?? 99;
+  const serviceFee = ground.service_fee_cents ?? SERVICE_FEE_CENTS; // was a hard-coded 99 after the fee went to $1.49 (2026-10-05)
   const platformFactsBlock = `PLATFORM FACTS (authoritative — applies to every order, not in menu):
-  - SprintAI adds a flat $${(serviceFee / 100).toFixed(2)} service fee to EVERY order. It is NOT a menu item. A stated total that equals (item subtotal + $${(serviceFee / 100).toFixed(2)}) is CORRECT — do NOT flag the service fee as invented_item or wrong_total.
+  - OrderFare adds a flat $${(serviceFee / 100).toFixed(2)} service fee to EVERY order. It is NOT a menu item. A stated total that equals (item subtotal + $${(serviceFee / 100).toFixed(2)}) is CORRECT — do NOT flag the service fee as invented_item or wrong_total.
   - Stripe mode: ${ground.is_test ? "TEST MODE — checkout sessions use cs_test_... IDs. The bot may issue a real test-mode checkout link even if has_real_checkout_session=false (session-lookup timing). Do NOT flag phantom_payment_link for test-mode shops when the bot's reply clearly states a checkout link was sent." : "LIVE MODE — phantom_payment_link applies normally."}
   - Compliance footer: The opt-out / compliance footer appended to every final bot message is TCR-registered and legally required. Do NOT flag it as compliance_slip.`;
 

@@ -21,6 +21,7 @@
 import type { TestCase, SuccessCriterion } from "./library.ts";
 import type { RunResult, TurnResult } from "./runner.ts";
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { SERVICE_FEE_CENTS } from "../fees.ts";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -82,9 +83,9 @@ function cartSubtotalCents(cart: CartItemLike[] | undefined | null): number {
   return sum;
 }
 
-/** Compute the expected grand total: subtotal + $0.99 service fee + delivery_fee + driver_tip. */
+/** Compute the expected grand total: subtotal + service fee (fees.ts) + delivery_fee + driver_tip. */
 function expectedTotalCents(cart: CartItemLike[] | undefined | null, deliveryFeeCents = 0, driverTipCents = 0): number {
-  return cartSubtotalCents(cart) + 99 + deliveryFeeCents + driverTipCents;
+  return cartSubtotalCents(cart) + SERVICE_FEE_CENTS + deliveryFeeCents + driverTipCents;
 }
 
 /** Unique key for a cart line: menu_item_id + sorted modifiers. */
@@ -189,7 +190,7 @@ function findQuotedTotal(text: string): { cents: number; raw: string } | null {
   m = cleaned.match(/(?:subtotal|items? total)[ \t:]*\$(\d+[.,]\d{2})/i);
   if (m) {
     const sub = Math.round(parseFloat(m[1].replace(",", "")) * 100);
-    return { cents: sub + 99, raw: `subtotal ${m[0]} + $0.99 fee` };
+    return { cents: sub + SERVICE_FEE_CENTS, raw: `subtotal ${m[0]} + service fee` };
   }
   // Pattern 3: total-claim keyword IMMEDIATELY BEFORE amount — "total is $X.XX",
   // "comes to $X.XX". Two guards against false positives (2026-09-02):

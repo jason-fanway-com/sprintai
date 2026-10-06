@@ -672,7 +672,7 @@ async function sendFoundingThankYouEmail(toEmail: string, ownerName: string): Pr
       You're one of the very first restaurants on OrderFare — and that means the world to us. You're helping shape what this platform becomes, and we don't take that lightly.
     </p>
     <p style="font-size:16px;line-height:1.6;margin:0 0 16px;color:#2A3540;">
-      As a founding shop, your $99/month subscription is <strong>waived for the next six months</strong>. You'll only pay the small $0.99 per-order service fee — the rest is our way of saying thank you for being early.
+      As a founding shop, your $99/month subscription is <strong>waived for the next six months</strong>. The small per-order fee is paid by your customers, not you — the rest is our way of saying thank you for being early.
     </p>
     <p style="font-size:16px;line-height:1.6;margin:0 0 24px;color:#2A3540;">
       If you ever hit a snag or have a question, reply to this email or text us directly. We actually read it, and we'll actually help.

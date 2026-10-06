@@ -159,7 +159,7 @@ export const LIBRARY_CASES: TestCase[] = [
       { role: "customer", message: "I need 500 plain bagels" },
     ],
     success_criteria: [
-      { id: "handles_extreme", description: "Bot responds appropriately (confirms, asks, or sets expectations) — total is quantity×unit-price; $0.99 service fee omission on a running subtotal (not a final total) is NOT a failure", check_id: "invented_item" },
+      { id: "handles_extreme", description: "Bot responds appropriately (confirms, asks, or sets expectations) — total is quantity×unit-price; service fee omission on a running subtotal (not a final total) is NOT a failure", check_id: "invented_item" },
     ],
   },
   {
@@ -440,7 +440,7 @@ export const CONVERSATIONAL_CASES: ConversationalCase[] = [
     seed_message: "I'll have a bacon egg and cheese",
     success_criteria: [
       { id: "upsell_accepted", description: "Bot successfully applies the flagel upgrade when customer accepts", check_id: "ignored_modifier" },
-      { id: "correct_total", description: "Total reflects BOBO ($8.75) + flagel upgrade ($0.60) + $0.99 service fee = $10.34", check_id: "wrong_total" },
+      { id: "correct_total", description: "Total reflects BOBO ($8.75) + flagel upgrade ($0.60) + $1.49 service fee = $10.84", check_id: "wrong_total" },
     ],
   },
   {
@@ -605,14 +605,14 @@ export const CONVERSATIONAL_CASES: ConversationalCase[] = [
     criticality: "normal",
     label: "Complete order → confirm → correct total + pickup info",
     persona: "Straightforward customer who knows the menu. You order a few items, confirm everything, and expect a clear total and pickup instructions.",
-    goal: "Order a sesame bagel with butter, an everything bagel with plain cream cheese, and a turkey club. Say yes to confirm, provide a pickup name (Pat), and verify the total includes the $0.99 service fee.",
+    goal: "Order a sesame bagel with butter, an everything bagel with plain cream cheese, and a turkey club. Say yes to confirm, provide a pickup name (Pat), and verify the total includes the $1.49 service fee.",
     max_turns: 6,
     seed_message: "Hi, I'd like a sesame bagel with butter, an everything bagel with cream cheese, and a turkey club",
     success_criteria: [
       { id: "all_items_added", description: "All 3 items added: sesame+butter ($2.75), everything+cc ($3.50), turkey club ($9.95)", check_id: "lost_cart" },
       { id: "checkout_reached", description: "Bot reaches checkout phase — asks for pickup name", check_id: "order_not_completed" },
-      { id: "service_fee_disclosed", description: "Bot discloses $0.99 service fee in the total", check_id: "wrong_total" },
-      { id: "correct_total", description: "Total = $16.20 subtotal + $0.99 service fee = $17.19", check_id: "wrong_total" },
+      { id: "service_fee_disclosed", description: "Bot discloses the $1.49 service fee in the total", check_id: "wrong_total" },
+      { id: "correct_total", description: "Total = $16.20 subtotal + $1.49 service fee = $17.69", check_id: "wrong_total" },
       { id: "pickup_info", description: "Bot gives clear pickup info once confirmed", check_id: "order_not_completed" },
     ],
   },
