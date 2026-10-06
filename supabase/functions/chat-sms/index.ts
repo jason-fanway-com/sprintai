@@ -464,6 +464,23 @@ function shopPausedNow(shop: { is_paused: boolean; paused_until?: string | null 
   return shop.is_paused === true && (!shop.paused_until || new Date(shop.paused_until) > new Date());
 }
 
+/** A bare "cancel" is a carrier opt-out word and must unsubscribe. If this customer has an order paid in the last few
+ *  hours, the confirmation also says how to cancel it (2026-10-06: "cancel" meant the order and unsubscribed them). */
+async function stopReplyFor(supabase: SupabaseClient, shopPhone: string, customerPhone: string, base: string): Promise<string> {
+  try {
+    const { data: sh } = await supabase.from("shops").select("id, name, phone_number_e164, tenant_id").eq("phone_number_e164", shopPhone).maybeSingle();
+    if (!sh) return base;
+    const { data: convs } = await supabase.from("conversations").select("id").eq("tenant_id", (sh as { tenant_id: string }).tenant_id).eq("customer_phone", customerPhone).limit(20);
+    const ids = ((convs ?? []) as Array<{ id: string }>).map((c) => c.id);
+    if (!ids.length) return base;
+    const { data: paid } = await supabase.from("order_carts").select("id").in("conversation_id", ids).eq("payment_status", "paid")
+      .gte("created_at", new Date(Date.now() - 6 * 3600_000).toISOString()).limit(1).maybeSingle();
+    if (!paid) return base;
+    const phone = (sh as { phone_number_e164?: string }).phone_number_e164?.replace(/^\+1(\d{3})(\d{3})(\d{4})$/, "($1) $2-$3") ?? "";
+    return `${base} To cancel your order, call ${(sh as { name: string }).name}${phone ? ` at ${phone}` : ""}.`;
+  } catch { return base; }
+}
+
 const PAID_CANCEL = new Set(["cancel", "cancel order", "cancel my order", "cancel the order", "cancel it", "cancel that", "please cancel", "please cancel my order", "i want to cancel", "i want to cancel my order", "i need to cancel", "i need to cancel my order", "can i cancel", "can i cancel my order", "cancel please", "cancel my order please", "nevermind cancel", "never mind cancel"]);
 
 function getBusinessDate(timezone: string): string {
@@ -1721,7 +1738,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     const upper      = userMessage.toUpperCase().trim();
     const STOP_WORDS = new Set(["STOP","STOPALL","UNSUBSCRIBE","CANCEL","END","QUIT"]);
     if (STOP_WORDS.has(upper)) {
-      await sendSms(supabase, "", inboundReplyCtx, replyProvider, toNumber, fromNumber, COMPLIANCE_STOP);
+      await sendSms(supabase, "", inboundReplyCtx, replyProvider, toNumber, fromNumber, upper === "CANCEL" ? await stopReplyFor(supabase, toNumber, fromNumber, COMPLIANCE_STOP) : COMPLIANCE_STOP);
       // Persist opt-out before returning (non-fatal; Telnyx is the backstop).
       const { data: stopShop } = await supabase.from("shops").select("tenant_id").eq("phone_number_e164", toNumber).maybeSingle();
       if (stopShop?.tenant_id) await upsertOptOut(supabase, stopShop.tenant_id, fromNumber, "proactive_stop");
@@ -1810,7 +1827,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
       const upper      = userMessage.toUpperCase().trim();
       const STOP_WORDS = new Set(["STOP","STOPALL","UNSUBSCRIBE","CANCEL","END","QUIT"]);
       if (STOP_WORDS.has(upper)) {
-        await sendSms(supabase, "", inboundReplyCtx, "telnyx", toNumber, fromNumber, COMPLIANCE_STOP);
+        await sendSms(supabase, "", inboundReplyCtx, "telnyx", toNumber, fromNumber, userMessage.toUpperCase().trim() === "CANCEL" ? await stopReplyFor(supabase, toNumber, fromNumber, COMPLIANCE_STOP) : COMPLIANCE_STOP);
         // Persist opt-out before returning (non-fatal; Telnyx is the backstop).
         const { data: tStopShop } = await supabase.from("shops").select("tenant_id").eq("phone_number_e164", toNumber).maybeSingle();
         if (tStopShop?.tenant_id) await upsertOptOut(supabase, tStopShop.tenant_id, fromNumber, "proactive_stop");
@@ -1891,8 +1908,9 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     // ever runs, so a STOP produces an immediate opt-out with no model reply.
     const STOP_WORDS_WEB = new Set(["STOP","STOPALL","UNSUBSCRIBE","CANCEL","END","QUIT"]);
     if (STOP_WORDS_WEB.has(userMessage.toUpperCase().trim())) {
+      const webStop = "You have been unsubscribed and will receive no further messages. Reply START to resubscribe.";
       return jsonResponse({
-        reply: "You have been unsubscribed and will receive no further messages. Reply START to resubscribe.",
+        reply: userMessage.toUpperCase().trim() === "CANCEL" && shop.phone_number_e164 ? await stopReplyFor(supabase, shop.phone_number_e164, `web:${sessionId}`, webStop) : webStop,
         cart: [], phase: "greeting", session_id: sessionId,
       });
     }
