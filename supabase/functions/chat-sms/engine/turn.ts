@@ -9,7 +9,7 @@ import { priceLine, totals, unitCents } from "./price.ts";
 import { render, type Ack, type Decline, type Info, type Question, type ReplyPlan } from "./render.ts";
 import type { Voice } from "./templates.ts";
 import { itemsInCategory } from "./menu.ts";
-import { contentWords, leadingCount, splitList, words, findWordRun, isWordSubset, sameWord, STOPWORDS, SIZE_WORDS, withoutCountry, normalize } from "./normalize.ts";
+import { contentWords, leadingCount, splitList, words, findWordRun, isWordSubset, sameWord, STOPWORDS, SIZE_WORDS, withoutCountry, normalize, closestWord } from "./normalize.ts";
 
 export interface TurnInput {
   form: OrderForm;
@@ -253,7 +253,7 @@ export function turn(input: TurnInput): TurnOutput {
 
   // 4. bind every line as far as the data allows
   const before = new Map(input.form.lines.map((l) => [l.line_id, JSON.stringify(l)])), gone = res.removed.length === 1 ? menu.items.get(res.removed[0].item_id ?? "") : undefined; if (gone) for (const l of form.lines) { if (before.has(l.line_id) || l.item_id !== null || resolveSpan(l.span, menu).kind === "item") continue; const r = resolveSpan(`${gone.display_name} ${l.span}`, menu); if (r.kind === "item" && r.id !== gone.id && menu.items.get(r.id)?.category === gone.category) l.span = `${gone.display_name} ${l.span}`; } // "make it chicken" for the Cooper Cheese Steak: a replacement is read against the line it replaced before the whole menu
-  for (const l of form.lines) bindLine(l, menu); for (const l of [...form.lines]) { if (l.item_id !== null || l.status.kind !== "unresolved") continue; const hosts = form.lines.filter((h) => h.item_id && menu.items.get(h.item_id)!.groups.some((g) => g.kind === "modifier" && matchChoice(l.span, g).kind === "one")); if (hosts.length === 1) { hosts[0].held.push(l.span); bindLine(hosts[0], menu); form.lines.splice(form.lines.indexOf(l), 1); } } // "cheeseburger" then "french fries" where fries are only the burger's swap: the burger's option, not an unknown item
+  for (const l of form.lines) bindLine(l, menu); for (const l of [...form.lines]) { if (l.item_id !== null) continue; const sp = words(l.span).map((w) => menu.vocab.has(w) || STOPWORDS.has(w) ? w : closestWord(w, menu.vocab) ?? w).join(" "), cw = contentWords(sp); if (!(l.status.kind === "unresolved" || (l.status.kind === "ambiguous" && !before.has(l.line_id) && !l.status.candidates.some((id) => isWordSubset(cw, menu.items.get(id)?.words ?? []))))) continue; const hosts = form.lines.filter((h) => h.item_id && menu.items.get(h.item_id)!.groups.some((g) => g.kind === "modifier" && matchChoice(sp, g).kind === "one")); if (hosts.length === 1) { hosts[0].held.push(sp); bindLine(hosts[0], menu); form.lines.splice(form.lines.indexOf(l), 1); } } // "cheeseburger" then "frencch fries" where fries are only the burger's swap: the burger's option, not an unknown item, and not the "Fried" Shrimp Basket a stem would guess
   // identical lines merge: "add two more hot dogs" is 3 × Hot Dog on one ticket row, not two rows
   for (let i = 0; i < form.lines.length; i++) for (let j = form.lines.length - 1; j > i; j--) {
     const a = form.lines[i], b = form.lines[j], same = (l: Line) => JSON.stringify([l.item_id, l.choices, l.modifiers, l.notes, l.selections ?? null]);
