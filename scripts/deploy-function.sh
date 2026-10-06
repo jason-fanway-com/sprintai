@@ -192,6 +192,8 @@ BUILD_DIR=$(mktemp -d)
 DOWNLOAD_DIR=$(mktemp -d)
 trap 'rm -rf "$BUILD_DIR" "$DOWNLOAD_DIR"' EXIT
 cp -R supabase "${BUILD_DIR}/supabase"
+# import-menu-csv imports ../../../menu-pipeline/core, outside supabase/
+[ -d menu-pipeline ] && cp -R menu-pipeline "${BUILD_DIR}/menu-pipeline"
 STAMPED_ENTRYPOINT="${BUILD_DIR}/supabase/functions/${FUNCTION_NAME}/index.ts"
 stamp_entrypoint "$STAMPED_ENTRYPOINT" "$HEAD_SHA_FULL"
 
