@@ -226,7 +226,7 @@ export function turn(input: TurnInput): TurnOutput {
   }
 
   const targetOf = (ref: LineRef) => "line_id" in ref ? form0.lines.find((l) => l.line_id === ref.line_id) : "span" in ref ? form0.lines.find((l) => lineMatchesSpan(l, ref.span, menu)) : form0.lines.length === 1 ? form0.lines[0] : undefined;
-  // 2. a change_line that changes nothing is the model pointing at a line: beside an add in the same batch ("actually pepperoni not cheese") that is a replacement; on its own it is nothing
+  if (words(input.message).some((w) => w === "menu" || w === "menus") && !moves.some((m) => m.kind === "ask_menu") && contentWords(input.message).every((w) => ["menu", "menus", "see", "show", "send", "look", "at", "view", "whats", "what", "is", "your", "full", "whole", "could", "may", "do", "we", "us", "the", "text", "link", "hey", "hi", "ok"].includes(w))) { moves.splice(0, moves.length, { kind: "ask_menu", about_span: null }); ledger.push({ turn: t, event: "menu_request_in_code" }); } // "can I see the menu please?" is the menu, decided here: the model once read it as show_cart, once as nothing (FNA's, 2026-10-06). 2. a change_line that changes nothing is the model pointing at a line: beside an add in the same batch ("actually pepperoni not cheese") that is a replacement; on its own it is nothing
   for (let i = moves.length - 1; i >= 0; i--) {
     const m = moves[i]; if (m.kind !== "change_line" || m.qty != null || m.add_option_spans?.length || m.remove_option_spans?.length) continue;
     const target = targetOf(m.ref);
