@@ -133,7 +133,7 @@ export function buildMenu(input: {
   }
   const termWordsByItem = new Map<string, Set<string>>();
   for (const t of itemTerms) { const set = termWordsByItem.get(t.target_id) ?? new Set<string>(); for (const w of t.words) set.add(w); termWordsByItem.set(t.target_id, set); }
-  const vocab = new Set([...itemTerms, ...categoryTerms].flatMap((t) => t.words));
+  const vocab = new Set([...[...itemTerms, ...categoryTerms].flatMap((t) => t.words), ...[...items.values()].flatMap((i) => i.groups.flatMap((g) => g.choices.flatMap((c) => c.words)))]); // option words too: "fries" that is only a burger swap is a word, not a typo for "fried"
   return { version: input.version, items, itemTerms, categoryTerms, canon, termWordsByItem, vocab, shop: input.shop };
 }
 
