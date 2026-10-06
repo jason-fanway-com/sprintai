@@ -903,6 +903,13 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
+    // a test shop (Vito's, the demo) only has test orders: show them unless the caller says otherwise
+    const anyShop = path.match(/^\/([a-f0-9-]+)\//)?.[1];
+    if (anyShop && !url.searchParams.has("include_test")) {
+      const { data: s } = await supabase.from("shops").select("is_test").eq("id", anyShop).maybeSingle();
+      if ((s as { is_test?: boolean } | null)?.is_test) url.searchParams.set("include_test", "true");
+    }
+
     // ── Route: GET /:shopId/summary ────────────────────────────────────────
     const summaryMatch = path.match(/^\/([a-f0-9-]+)\/summary$/);
     if (summaryMatch && req.method === "GET") {
