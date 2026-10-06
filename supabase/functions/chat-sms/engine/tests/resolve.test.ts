@@ -98,3 +98,11 @@ Deno.test("stems: 'parm' narrows to parmesan; resolveSpan finds the chicken parm
   assertEquals(narrow(["chparm", IDS.cheesesteak], "parm", menu), ["chparm"]);
   assertEquals(narrow(["chparm", IDS.cheesesteak], "par", menu), []);
 });
+
+Deno.test("a whole \"X with Y\" span the menu cannot place is the item X with options Y (the model left it unsplit)", () => {
+  const l = line("cup lobster bisque soup with extra crackers");
+  assertEquals(resolveSpan(l.span, menu).kind, "none");
+  bindLine(l, menu);
+  assertEquals(l.item_id, "lbCup");
+  assertEquals(l.span, "cup lobster bisque soup");
+});

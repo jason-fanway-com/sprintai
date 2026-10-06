@@ -241,7 +241,7 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true)
  * Returns the item it ended on, if any.
  */
 export function bindLine(line: Line, menu: Menu): void {
-  menuTermWords = menu.termWordsByItem; menuRef = menu; filledNow = new Set();
+  menuTermWords = menu.termWordsByItem; menuRef = menu; filledNow = new Set(); if (line.item_id === null && line.status.kind !== "ambiguous" && resolveSpan(line.span, menu).kind === "none") { const w = words(line.span), i = w.indexOf("with"); if (i > 0 && resolveSpan(w.slice(0, i).join(" "), menu).kind !== "none") { line.held.push(...splitList(w.slice(i + 1).join(" "))); line.span = w.slice(0, i).join(" "); } } // the model left "boneless wing basket with fries and hot sauce" whole: the item is before "with", its options after
   // An unresolved line whose customer gave a replacement span: swap the span.
   if (line.item_id === null && line.status.kind === "unresolved" && (line.answers?.length ?? 0) > 0) {
     const first = line.answers![0];
