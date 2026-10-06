@@ -123,3 +123,6 @@ verify_jwt = false  # Called from the public, unauthenticated /try page with no
 
 [functions.access-request]
 verify_jwt = false  # the approve page has no session; the emailed one-time token is the proof
+
+[functions.refund-order]
+verify_jwt = false  # checks the caller itself: the shop owner, an OrderFare admin, or an internal caller

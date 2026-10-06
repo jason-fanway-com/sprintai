@@ -90,6 +90,11 @@ interface Proposal {
   category?: string | null;
   duration?: string;
   minutes?: number;
+  order_number?: number;
+  initiated_by?: "shop" | "customer";
+  food_refund?: "all" | "none" | "part";
+  food_refund_dollars?: number;
+  cart_id?: string;
   group_name?: string;
   add_choices?: { name: string; price_cents: number }[];
   remove_choices?: string[];
@@ -270,6 +275,24 @@ const ADMIN_TOOLS = [
         clarification_question: { type: "string" },
         clarification_options: { type: "array", items: { type: "string" } },
         summary: { type: "string", description: "e.g. 'Remove Pickles from Toppings on 8 cheesesteaks'" },
+      },
+      required: ["needs_clarification", "summary"],
+    },
+  },
+  {
+    name: "REFUND_ORDER",
+    description: "Cancel or refund a paid order: 'refund order 23, the customer cancelled', 'cancel order 41, we're out of dough'. OrderFare applies the refund rules (cancels the Uber driver first, keeps Uber's charges the rules say to keep); the owner decides who cancelled and how much of the food to refund.",
+    input_schema: {
+      type: "object",
+      properties: {
+        order_number: { type: "integer", description: "The order number, e.g. 23" },
+        initiated_by: { type: "string", enum: ["customer", "shop"], description: "customer: the customer cancelled or asked for a refund; shop: the shop can't fill it or made a mistake" },
+        food_refund: { type: "string", enum: ["all", "none", "part"], description: "How much of the food to refund when the customer cancelled; ignored when the shop cancelled (the customer gets everything back)" },
+        food_refund_dollars: { type: "number", description: "With food_refund 'part': the dollars of food to refund" },
+        needs_clarification: { type: "boolean", description: "True if the order number or who cancelled is unclear" },
+        clarification_question: { type: "string" },
+        clarification_options: { type: "array", items: { type: "string" } },
+        summary: { type: "string" },
       },
       required: ["needs_clarification", "summary"],
     },
@@ -620,6 +643,7 @@ CRITICAL RULES — VIOLATING ANY OF THESE IS A BUG:
 5. For ADD_SPECIAL: name AND price are required. If either is missing, set needs_clarification=true and ask for the missing field.
 6. For PAUSE_DELIVERY and PAUSE_ORDERING: any length the owner states is duration "minutes" with minutes set ("6 hours" = 360, "an hour and a half" = 90); "for today"/"rest of the day" is rest_of_day; "until I say"/"until further notice" is indefinite. Only if no length is stated, set needs_clarification=true with options: ["1 hour", "Rest of today", "Until I turn it back on"]. When the owner answers one of those options (or any length) after you asked, that answer completes the earlier request — call the same tool again with it.
 5a. A menu change to several items ("no pickles on any cheesesteak", "all burgers", "every hot sandwich") is SET_OPTIONS_ON_ITEMS with every matching item_id; a change to one named item is SET_ITEM_OPTIONS. If the owner's words could mean one item or several, ask.
+5b. REFUND_ORDER needs the order number and who cancelled. If the customer cancelled and the owner hasn't said how much of the food to refund, ask (options: "All of the food", "None, it was already made", "Part").
 6a. "Turn off text ordering", "close the shop", "stop taking orders", "we're closed today" are PAUSE_ORDERING (not PAUSE_DELIVERY). If the owner says what customers should be told, put it in pause_message verbatim.
 7. For QUERY_STATUS: just return the stats; no state change.
 8. For UNDO: no clarification needed — just propose it.
@@ -659,6 +683,17 @@ function getBusinessDate(tz: string): string {
   } catch {
     return new Date().toISOString().slice(0, 10);
   }
+}
+
+/** refund-order, called as a trusted internal caller (this function already limits the owner to their own shop) */
+async function callRefund(body: Record<string, unknown>): Promise<{ ok: true; data: Record<string, unknown> } | { ok: false; error: string }> {
+  const r = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/refund-order`, { method: "POST", headers: { Authorization: `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  return r.ok ? { ok: true, data } : { ok: false, error: (data as { error?: string }).error ?? `refund failed (${r.status})` };
+}
+function refundFoodCents(p: Proposal): number | undefined {
+  if (p.initiated_by === "shop" || !p.food_refund || p.food_refund === "all") return undefined;
+  return p.food_refund === "none" ? 0 : Math.round((p.food_refund_dollars ?? 0) * 100);
 }
 
 /** When a pause ends: minutes from now, the next local midnight (rest of today), or null (until turned back on). */
@@ -813,6 +848,19 @@ async function validateProposal(
       return { valid: true };
     }
     case "RESUME_ORDERING": return { valid: true };
+    case "REFUND_ORDER": {
+      if (proposal.needs_clarification) return { valid: true, clarification: makeClarificationCard(proposal) };
+      if (!proposal.order_number || !proposal.initiated_by) return { valid: true, clarification: makeClarificationCard({ ...proposal, clarification_question: "Which order, and who cancelled?", clarification_options: [] }) };
+      const { data: cart } = await supabase.from("order_carts").select("id, payment_status, refunded_cents").eq("shop_id", shopId).eq("order_number", proposal.order_number).order("created_at", { ascending: false }).limit(1).maybeSingle();
+      if (!cart) return { valid: false, error: `I can't find order #${proposal.order_number} for this shop.` };
+      proposal.cart_id = (cart as { id: string }).id;
+      const pv = await callRefund({ order_cart_id: proposal.cart_id, initiated_by: proposal.initiated_by, food_refund_cents: refundFoodCents(proposal), preview: true });
+      if (!pv.ok) return { valid: false, error: pv.error };
+      const p = pv.data.plan as { foodRefundCents: number; platformRefundCents: number; customerRefundCents: number; shopOwesCents: number; cancelCourier: boolean; explain: string[] };
+      const m = (c: number) => `$${(c / 100).toFixed(2)}`;
+      proposal.summary = `Order #${proposal.order_number}: the customer gets ${m(p.customerRefundCents)} back (food ${m(p.foodRefundCents)} from you, ${m(p.platformRefundCents)} delivery/fee from OrderFare).${p.cancelCourier ? " The Uber driver is cancelled first." : ""}${p.shopOwesCents ? ` Uber's ${m(p.shopOwesCents)} fee comes out of your next orders.` : ""}${p.explain.length ? " " + p.explain.join(" ") : ""}`;
+      return { valid: true };
+    }
     case "SET_OPTIONS_ON_ITEMS": {
       if (proposal.needs_clarification) return { valid: true, clarification: makeClarificationCard(proposal) };
       const ids = proposal.item_ids ?? [];
@@ -1263,6 +1311,15 @@ async function executeAction(
         delivery_enabled_after: true,
         delivery_paused_until_after: until,
       };
+      break;
+    }
+    case "REFUND_ORDER": {
+      const r = await callRefund({ order_cart_id: proposal.cart_id, initiated_by: proposal.initiated_by, food_refund_cents: refundFoodCents(proposal) });
+      if (!r.ok) throw new Error(r.error);
+      const p = r.data.plan as { customerRefundCents: number };
+      beforeSnapshot = { type: "refund", cart_id: proposal.cart_id };
+      afterSnapshot = { type: "refund", refunded_cents: p.customerRefundCents };
+      resultMsg = p.customerRefundCents > 0 ? `Done — order #${proposal.order_number} refunded $${(p.customerRefundCents / 100).toFixed(2)}. The customer has been texted.` : `Done — order #${proposal.order_number} is cancelled; nothing to refund.`;
       break;
     }
     case "PAUSE_ORDERING": {

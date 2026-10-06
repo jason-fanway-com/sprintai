@@ -11,6 +11,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useEffectiveTenant } from '../lib/useOwnerTenant'
+import RefundDialog from '../components/shop/RefundDialog'
 
 type ExpoStatus = 'new' | 'acknowledged' | 'preparing' | 'done'
 
@@ -82,6 +83,7 @@ export default function ExpoScreen() {
   const [resolvedShopId, setResolvedShopId] = useState<string | null>(null)
   const shopId = shopIdParam ?? resolvedShopId ?? undefined
   const [orders, setOrders] = useState<OrderCart[]>([])
+  const [refunding, setRefunding] = useState<{ id: string; n: number | null } | null>(null)
   const [connected, setConnected] = useState(true)
 
   // When no shopId in URL (owner nav), resolve from tenant
@@ -253,6 +255,8 @@ export default function ExpoScreen() {
   for (const o of orders) grouped[o.expo_status]?.push(o)
 
   return (
+    <>
+    {refunding && <RefundDialog cartId={refunding.id} orderNumber={refunding.n} onClose={() => setRefunding(null)} onDone={() => {}} />}
     <div
       className="min-h-screen bg-gray-950 text-white select-none"
       onClick={unlockAudio}
@@ -380,6 +384,12 @@ export default function ExpoScreen() {
                     )}
                   </div>
 
+                  {order.payment_status === 'paid' && (
+                    <button onClick={(e) => { e.stopPropagation(); setRefunding({ id: order.id, n: order.order_number }) }} className="mt-1 text-xs text-gray-400 underline hover:text-gray-200">
+                      Cancel / refund
+                    </button>
+                  )}
+
                   {/* Pickup time */}
                   {order.pickup_time && (
                     <div className="mt-1 text-xs text-gray-500">
@@ -393,5 +403,6 @@ export default function ExpoScreen() {
         ))}
       </div>
     </div>
+    </>
   )
 }

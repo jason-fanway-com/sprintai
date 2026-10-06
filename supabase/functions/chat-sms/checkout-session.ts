@@ -80,6 +80,8 @@ export interface CreateCheckoutSessionInput {
   courierDelivery?:  boolean;
   /** the Stripe key moves real money (sk_live): then a charge must be on the shop's account */
   liveMoney?:        boolean;
+  /** what the shop owes OrderFare (shop-caused Uber fees): recovered from this order's food + tax, never more */
+  balanceOwedCents?: number;
 }
 
 export interface CreateCheckoutSessionDeps {
@@ -182,7 +184,8 @@ export async function createCheckoutSession(
   // The shop is the seller: a real order is charged on the shop's Stripe account, OrderFare taking its share as the
   // application fee. Real money never falls back to OrderFare's own account (2026-10-06: every order was landing there).
   if (!input.connectedAccountId && input.liveMoney) return { ok: false, error: "this shop is not set up to take payments yet" };
-  const applicationFee = input.connectedAccountId ? platformShareCents(input.serviceFeeCents, !!input.courierDelivery, input.deliveryFeeCents, input.tipCents) : 0;
+  const recovered = input.connectedAccountId ? Math.max(0, Math.min(input.balanceOwedCents ?? 0, input.subtotalCents + (input.taxCents ?? 0))) : 0;
+  const applicationFee = input.connectedAccountId ? platformShareCents(input.serviceFeeCents, !!input.courierDelivery, input.deliveryFeeCents, input.tipCents) + recovered : 0;
   const session = await deps.stripe.checkout.sessions.create({
     mode:                 "payment",
     payment_method_types: ["card"],
@@ -208,6 +211,7 @@ export async function createCheckoutSession(
     driver_tip_cents:            input.tipCents,
     tax_cents:                   taxCents,
     stripe_checkout_session_id:  session.id,
+    balance_recovered_cents:     recovered,
     phase:                       "checkout",
   }).eq("id", input.cartId);
 
@@ -252,6 +256,7 @@ export function buildEngineCheckoutSessionInput(params: {
   connectedAccountId?: string | null;
   courierDelivery?:  boolean;
   liveMoney?:        boolean;
+  balanceOwedCents?: number;
 }): CreateCheckoutSessionInput {
   const realLines = params.cartLines.filter(l => typeof l.menu_item_id === "string");
 
@@ -281,6 +286,7 @@ export function buildEngineCheckoutSessionInput(params: {
     connectedAccountId: params.connectedAccountId ?? null,
     courierDelivery:  !!params.courierDelivery,
     liveMoney:        !!params.liveMoney,
+    balanceOwedCents: params.balanceOwedCents ?? 0,
   };
 }
 

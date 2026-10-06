@@ -1,146 +1,124 @@
 /**
- * SprintAI refund-order Edge Function (Spec 02 — refund policy)
+ * refund-order — cancel or refund a paid order by the agreed rules (Jason 2026-10-05/06; _shared/refund-rules.ts).
  *
- * POST /functions/v1/refund-order
- * Body: { order_cart_id, amount_cents?, reason? }
+ * POST { order_cart_id, initiated_by: "shop" | "customer", food_refund_cents?, preview? }
+ *   Authorization: the shop owner's or an OrderFare admin's session (admin-chat forwards the owner's).
  *
- * Refunds an order's DIRECT charge on the CONNECTED account.
- *
- * REFUND POLICY (Jason 2026-06-20):
- *   - FULL refund  → also return Sprint's $0.99 application fee by passing
- *                    `refund_application_fee: true` on the Refund create call.
- *                    The $0.99 is NOT returned automatically — it must be
- *                    requested explicitly (verified docs.stripe.com:
- *                    "Application fees aren't automatically refunded when
- *                    issuing a refund").
- *   - PARTIAL refund → KEEP the $0.99 (do NOT set refund_application_fee).
- *
- * The refund is created with the platform secret key while authenticated as the
- * connected account (the `Stripe-Account` header), exactly as Stripe requires
- * for refunding direct charges.
+ * Only the shop starts a refund; OrderFare never decides one. preview: true returns the plan and changes nothing.
+ * Otherwise: cancel the courier first (if the plan says so), re-plan on what Uber actually did, then refund —
+ *  - on the shop's Stripe account (a direct charge): hand back the matching part of OrderFare's application fee to the
+ *    shop's account, then refund the customer from it; never reverse_transfer (direct charges have no transfer);
+ *  - on OrderFare's account (a test order with no shop account): one refund.
+ * A shop-caused Uber charge goes on the shop's balance (migration 152). The note is texted with the refund notice.
  */
-
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import { makeStripe, connectedAccountOpts } from "../_shared/connect.ts";
-import { cancelDeliveryForCart, type CancelOutcome } from "../_shared/delivery-store.ts";
+import { cancelDeliveryForCart, deliveryForCart } from "../_shared/delivery-store.ts";
 import { providerFor } from "../_shared/delivery-providers.ts";
+import { applicationFeeRefundCents, planRefund, type CourierStage, type RefundPlan } from "../_shared/refund-rules.ts";
+import { getTestModeStripeKey } from "../_shared/test-mode.ts";
 
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "content-type, authorization",
-};
+const CORS_HEADERS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Allow-Headers": "content-type, authorization, apikey, x-client-info" };
+const json = (d: unknown, status = 200) => new Response(JSON.stringify(d), { status, headers: { ...CORS_HEADERS, "Content-Type": "application/json" } });
+const err = (m: string, status = 400) => json({ error: m }, status);
+
+function stageOf(status: string | null | undefined): CourierStage {
+  if (!status) return "none";
+  if (status === "created" || status === "quoted") return "requested";
+  if (status === "courier_assigned") return "assigned";
+  if (status === "picked_up" || status === "dropped_off") return "picked_up";
+  return "none"; // canceled / returned / unknown: nothing left to cancel
+}
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
-  if (req.method !== "POST") return jsonError("Method Not Allowed", 405);
+  if (req.method !== "POST") return err("Method Not Allowed", 405);
+  let body: { order_cart_id?: string; initiated_by?: string; food_refund_cents?: number; preview?: boolean };
+  try { body = await req.json(); } catch { return err("Invalid JSON"); }
+  const cartId = body.order_cart_id, by = body.initiated_by;
+  if (!cartId) return err("order_cart_id is required");
+  if (by !== "shop" && by !== "customer") return err("Say who cancelled: the shop or the customer.");
 
-  const stripeKey = Deno.env.get("STRIPE_SECRET_KEY") ?? "";
-  if (!stripeKey) return jsonError("Stripe not configured", 500);
+  const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, { auth: { persistSession: false } });
 
-  let body: { order_cart_id?: string; amount_cents?: number; reason?: string };
-  try { body = await req.json(); } catch { return jsonError("Invalid JSON"); }
-  const { order_cart_id, amount_cents, reason } = body;
-  if (!order_cart_id) return jsonError("order_cart_id is required");
+  // who may refund: an OrderFare admin, or the owner of the order's shop (it used to accept anyone, 2026-10-06)
+  const jwt = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
+  const internalKeys = [Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"), Deno.env.get("INTERNAL_FUNCTION_SECRET")].filter((k): k is string => !!k && k.length > 20);
+  const internal = internalKeys.includes(jwt); // admin-chat (already scoped to the owner's shop) and OrderFare's own tooling
+  const user = internal ? null : (await db.auth.getUser(jwt)).data.user;
+  if (!internal && !user) return err("Please sign in.", 401);
+  const role = internal ? "super_admin" : (user!.app_metadata as { role?: string } | null)?.role, tenant = internal ? undefined : (user!.app_metadata as { tenant_id?: string } | null)?.tenant_id;
 
-  const supabase = createClient(
-    Deno.env.get("SUPABASE_URL") ?? "",
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
-    { auth: { persistSession: false } },
-  );
+  const { data: c } = await db.from("order_carts").select("*, shops(id, tenant_id, name, phone_number_e164)").eq("id", cartId).maybeSingle();
+  const cart = c as Record<string, any> | null;
+  if (!cart) return err("Order not found.", 404);
+  const shop = cart.shops as { id: string; tenant_id: string; name: string };
+  if (role !== "super_admin" && !(role === "shop_owner" && tenant && tenant === shop.tenant_id)) return err("Order not found.", 404);
+  if (cart.payment_status !== "paid") return err("That order isn't paid, so there's nothing to refund.", 409);
+  if ((cart.refunded_cents ?? 0) > 0) return err("That order has already been refunded.", 409);
 
-  const { data: cart, error: cartErr } = await supabase
-    .from("order_carts")
-    .select("id, total_cents, subtotal_cents, service_fee_cents, stripe_payment_intent_id, stripe_charge_id, stripe_connected_account_id, refunded_cents")
-    .eq("id", order_cart_id)
-    .single();
+  const delivery = await deliveryForCart(db, cartId);
+  const foodTax = (cart.subtotal_cents ?? 0) + (cart.tax_cents ?? 0);
+  const courier = !!delivery && (delivery.provider ?? "own") !== "own";
+  const base = {
+    foodTaxCents: foodTax, feeCents: cart.service_fee_cents ?? 0, courier,
+    deliveryCents: cart.delivery_fee_cents ?? 0, tipCents: cart.driver_tip_cents ?? 0,
+    initiatedBy: by as "shop" | "customer", foodRefundCents: body.food_refund_cents ?? foodTax,
+  };
+  let plan: RefundPlan = planRefund({ ...base, stage: courier ? stageOf(delivery!.status) : "none" });
+  if (body.preview) return json({ preview: true, plan, order_number: cart.order_number, total_cents: cart.total_cents });
 
-  if (cartErr || !cart) return jsonError("Order not found", 404);
-
-  const connectedAccountId = cart.stripe_connected_account_id as string | null;
-  if (!connectedAccountId) return jsonError("Order has no connected account on file", 409);
-
-  const paymentIntentId = cart.stripe_payment_intent_id as string | null;
-  const chargeId = cart.stripe_charge_id as string | null;
-  if (!paymentIntentId && !chargeId) return jsonError("Order has no Stripe charge to refund", 409);
-
-  // Full vs partial determination. Default (no amount) = FULL refund.
-  const orderTotal = cart.total_cents ?? 0;
-  const isFull = amount_cents == null || amount_cents >= orderTotal;
-  const refundAmount = isFull ? undefined : amount_cents; // undefined => Stripe refunds the full remaining
-
-  const stripe = makeStripe(stripeKey);
-
-  try {
-    const params: Record<string, unknown> = {
-      reason: reason && ["duplicate", "fraudulent", "requested_by_customer"].includes(reason)
-        ? reason
-        : "requested_by_customer",
-    };
-    if (paymentIntentId) params.payment_intent = paymentIntentId;
-    else params.charge = chargeId;
-    if (refundAmount != null) params.amount = refundAmount;
-
-    // FULL refund returns the $0.99; PARTIAL keeps it.
-    // NOTE: do NOT add `reverse_transfer` here. These are DIRECT charges
-    // (Stripe-Account header, no transfer_data) so NO transfer exists to
-    // reverse — Stripe rejects reverse_transfer with "does not have an
-    // associated transfer". Proven in TEST mode 2026-06-22; see
-    // REFUND-REVERSE-TRANSFER-FINDING.md. reverse_transfer is only for
-    // destination/separate charges, which this model intentionally does not use.
-    if (isFull) params.refund_application_fee = true;
-
-    const refund = await stripe.refunds.create(
-      params as never,
-      // Refund on the connected account (direct charge) + idempotency per attempt.
-      connectedAccountOpts(connectedAccountId, `refund_${order_cart_id}_${isFull ? "full" : amount_cents}`),
-    );
-
-    const newRefunded = (cart.refunded_cents ?? 0) + (refund.amount ?? 0);
-    const refundStatus = newRefunded >= orderTotal ? "full" : "partial";
-
-    await supabase
-      .from("order_carts")
-      .update({
-        refunded_cents: newRefunded,
-        refund_status: refundStatus,
-        payment_status: refundStatus === "full" ? "refunded" : "paid",
-      })
-      .eq("id", order_cart_id);
-
-    // A full refund calls the courier off when one is booked and it is still cancellable. A courier who
-    // already has the food makes it a return, which the provider bills (OrderFare's cost in the pilot).
-    // A partial refund (a missing item) leaves the delivery alone.
-    let courier: CancelOutcome | null = null;
-    if (refundStatus === "full") {
-      try { courier = await cancelDeliveryForCart(supabase, order_cart_id, providerFor); }
-      catch (e) { console.error(`[refund-order] courier cancel failed for cart ${order_cart_id}:`, e); }
-      if (courier && !courier.cancelled && courier.reason !== "no_delivery") console.warn(`[refund-order] courier not cancelled for cart ${order_cart_id}: ${JSON.stringify(courier)}`);
-    }
-
-    console.log(`[refund-order] ${refundStatus} refund ${refund.id} on cart ${order_cart_id} acct ${connectedAccountId}: $${((refund.amount ?? 0) / 100).toFixed(2)}${isFull ? " (+$0.99 app fee returned)" : " ($0.99 kept)"}`);
-
-    return jsonResponse({
-      refund_id: refund.id,
-      amount_cents: refund.amount,
-      refund_status: refundStatus,
-      application_fee_refunded: isFull,
-      ...(courier ? { courier } : {}),
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[refund-order] Stripe error:", msg);
-    return jsonError(msg, 500);
+  // 1. the courier first: what Uber actually does decides OrderFare's part
+  if (plan.cancelCourier) {
+    const out = await cancelDeliveryForCart(db, cartId, providerFor).catch(() => ({ cancelled: false as const, reason: "provider_refused" as const }));
+    if (!out.cancelled) plan = planRefund({ ...base, stage: "picked_up" });                      // Uber refused: treat as on its way
+    else if ("fee_cents" in out && out.fee_cents > 0) plan = planRefund({ ...base, stage: "assigned", uberReportedFeeCents: out.fee_cents });
   }
+  if (plan.customerRefundCents <= 0) {
+    await db.from("order_carts").update({ refund_note: plan.explain.join(" ") || null }).eq("id", cartId);
+    return json({ ok: true, plan, refunded_cents: 0 });
+  }
+
+  // 2. the money
+  const key = cart.test_mode ? (getTestModeStripeKey() ?? "") : (Deno.env.get("STRIPE_SECRET_KEY") ?? "");
+  if (!key) return err("Payments aren't configured.", 500);
+  const stripe = makeStripe(key);
+  const acct = cart.stripe_connected_account_id as string | null;
+  const pi = cart.stripe_payment_intent_id as string | null, charge = cart.stripe_charge_id as string | null;
+  if (!pi && !charge) return err("That order has no card payment on file.", 409);
+  const meta = { orderfare: "1", initiated_by: by, cart_id: cartId };
+  try {
+    if (acct) {
+      const share = base.feeCents + (courier ? base.deliveryCents + base.tipCents : 0);
+      if (plan.platformRefundCents > 0) {
+        const ch = await stripe.charges.retrieve(charge ?? ((await stripe.paymentIntents.retrieve(pi!, connectedAccountOpts(acct))).latest_charge as string), connectedAccountOpts(acct));
+        const feeId = typeof ch.application_fee === "string" ? ch.application_fee : ch.application_fee?.id;
+        const feeAmt = ch.application_fee_amount ?? 0;
+        const back = applicationFeeRefundCents(feeAmt, share, plan.platformRefundCents);
+        if (feeId && back > 0) await stripe.applicationFees.createRefund(feeId, { amount: back, metadata: meta }, { idempotencyKey: `appfee_${cartId}` });
+      }
+      await stripe.refunds.create({ ...(pi ? { payment_intent: pi } : { charge: charge! }), amount: plan.customerRefundCents, reason: "requested_by_customer", metadata: meta },
+        connectedAccountOpts(acct, `refund_${cartId}`));
+    } else {
+      await stripe.refunds.create({ ...(pi ? { payment_intent: pi } : { charge: charge! }), amount: plan.customerRefundCents, reason: "requested_by_customer", metadata: meta },
+        { idempotencyKey: `refund_${cartId}` });
+    }
+  } catch (e) {
+    console.error("[refund-order] stripe:", e);
+    return err("The card refund didn't go through: " + (e instanceof Error ? e.message : String(e)), 502);
+  }
+
+  // 3. the record
+  const full = plan.customerRefundCents >= (cart.total_cents ?? 0);
+  await db.from("order_carts").update({
+    refunded_cents: plan.customerRefundCents, refund_status: full ? "full" : "partial", payment_status: full ? "refunded" : "paid",
+    refund_note: plan.explain.join(" ") || null,
+  }).eq("id", cartId);
+  if (plan.shopOwesCents > 0) {
+    await db.from("shop_balance_entries").insert({ shop_id: shop.id, cart_id: cartId, cents: plan.shopOwesCents, reason: "Uber cancellation fee (shop cancelled after a driver accepted)" });
+    const { data: s } = await db.from("shops").select("balance_owed_cents").eq("id", shop.id).single();
+    await db.from("shops").update({ balance_owed_cents: ((s as { balance_owed_cents?: number } | null)?.balance_owed_cents ?? 0) + plan.shopOwesCents }).eq("id", shop.id);
+  }
+  console.log(`[refund-order] cart ${cartId} by ${by}: customer ${plan.customerRefundCents} (food ${plan.foodRefundCents}, platform ${plan.platformRefundCents}), uber ${plan.uberChargeCents}, shop owes ${plan.shopOwesCents}`);
+  return json({ ok: true, plan, refunded_cents: plan.customerRefundCents });
 });
-
-function jsonResponse(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-  });
-}
-
-function jsonError(message: string, status = 400): Response {
-  return jsonResponse({ error: message }, status);
-}

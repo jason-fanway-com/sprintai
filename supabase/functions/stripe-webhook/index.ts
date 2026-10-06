@@ -286,6 +286,22 @@ async function handleChargeRefunded(
 
   console.log(`[stripe-webhook] charge.refunded ${charge.id} → cart ${cart.id}: ${refundStatus} ($${(refunded / 100).toFixed(2)} of $${(amount / 100).toFixed(2)})`);
 
+  // refunds belong in OrderFare, where the delivery money and Uber's charges are handled; one made straight in Stripe
+  // is flagged for OrderFare to square up by hand (Jason 2026-10-06), never guessed at
+  try {
+    const key = (charge.livemode ? Deno.env.get("STRIPE_SECRET_KEY") : (Deno.env.get("STRIPE_TEST_SECRET_KEY") ?? Deno.env.get("STRIPE_SECRET_KEY"))) ?? "";
+    const s = new Stripe(key, { apiVersion: "2023-10-16", httpClient: Stripe.createFetchHttpClient() });
+    const list = await s.refunds.list({ charge: charge.id, limit: 10 }, connectedAccount ? { stripeAccount: connectedAccount } : undefined);
+    if (list.data.some((r: Stripe.Refund) => r.metadata?.orderfare !== "1")) {
+      const { data: sh } = await supabase.from("shops").select("tenant_id").eq("id", (cart as { shop_id?: string }).shop_id ?? "").maybeSingle();
+      await supabase.from("issues").insert({
+        tenant_id: (sh as { tenant_id?: string } | null)?.tenant_id ?? null, shop_id: (cart as { shop_id?: string }).shop_id ?? null, conversation_id: cart.conversation_id ?? null,
+        detection_rule: "refund_outside_orderfare", severity: "sev_2", status: "open",
+        title: "A refund was made directly in Stripe", description: `Charge ${charge.id}: refunded outside OrderFare, so the delivery money and any Uber charges were not handled. Square up by hand.`,
+      });
+    }
+  } catch (e) { console.error("[stripe-webhook] refund-origin check failed:", e); }
+
   if (cart.conversation_id) {
     // ALLOWED TRANSACTIONAL EXCEPTION #2 of 2 (lead directive 2026-06-22):
     // the REFUND NOTICE. This outbound directly follows the customer's own
@@ -442,6 +458,18 @@ async function handleOrderPaymentComplete(
     .eq("id", cartId);
 
   if (error) throw new Error(`Failed to update cart ${cartId}: ${error.message}`);
+
+  // this order's fee recovered part of what the shop owed (shop-caused Uber fees, migration 152): settle it now it's paid
+  {
+    const { data: rec } = await supabase.from("order_carts").select("shop_id, balance_recovered_cents").eq("id", cartId).maybeSingle();
+    const got = (rec as { balance_recovered_cents?: number } | null)?.balance_recovered_cents ?? 0;
+    if (rec && got > 0) {
+      const shopId = (rec as { shop_id: string }).shop_id;
+      await supabase.from("shop_balance_entries").insert({ shop_id: shopId, cart_id: cartId, cents: -got, reason: "Recovered from this order's fee" });
+      const { data: s } = await supabase.from("shops").select("balance_owed_cents").eq("id", shopId).single();
+      await supabase.from("shops").update({ balance_owed_cents: Math.max(0, ((s as { balance_owed_cents?: number } | null)?.balance_owed_cents ?? 0) - got) }).eq("id", shopId);
+    }
+  }
 
   // Stub email ticket — log full order details
   const { data: cart } = await supabase

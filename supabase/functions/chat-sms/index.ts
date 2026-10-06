@@ -1290,7 +1290,8 @@ export async function handleSystemEvent(
   } else if (system_event === "order_refunded") {
     // ALLOWED EXCEPTION #2 of 2: refund notice (customer's paid order refunded).
     const refunded = ((cartRow.refunded_cents ?? 0) / 100).toFixed(2);
-    message = `A refund of $${refunded} has been issued for your order. It may take a few business days to appear on your statement.`;
+    const note = (cartRow.refund_note as string | null) ?? "";
+    message = `A refund of $${refunded} has been issued for your order from ${shop.name}.${note ? ` ${note}` : ""} It may take a few business days to appear on your statement.`;
   } else if (system_event === "order_disputed") {
     // Internal/shop-facing event; no diner-facing copy needed, but ack so the
     // webhook's notify call succeeds. Keep diner messaging silent here.
@@ -2523,6 +2524,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
             connectedAccountId: (shop as { charges_enabled?: boolean; stripe_connected_account_id?: string | null }).charges_enabled ? (shop as { stripe_connected_account_id?: string | null }).stripe_connected_account_id ?? null : null,
             courierDelivery: req.courier,
             liveMoney: /^(sk|rk)_live_/.test(key),
+            balanceOwedCents: (shop as { balance_owed_cents?: number }).balance_owed_cents ?? 0,
           });
           const r = await createCheckoutSession(sessionInput, { supabase, stripe });
           return r.ok ? { ok: true, sessionId: r.sessionId, url: r.checkoutUrl } : { ok: false, error: r.error };
