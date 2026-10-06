@@ -33,6 +33,7 @@ import TestSuite from './pages/TestSuite'
 import FinancialReporting from './pages/FinancialReporting'
 import ExpoScreen from './pages/ExpoScreen'
 import RequestAccess from './pages/RequestAccess'
+import OwnerHealth from './pages/OwnerHealth'
 import ApproveAccess from './pages/ApproveAccess'
 
 // ── route guards ────────────────────────────────────────────────────────────
@@ -158,6 +159,14 @@ export default function App() {
             }
           />
           <Route path="menu-settings" element={<Navigate to="/menu" replace />} />
+          <Route
+            path="health"
+            element={
+              <ShopOwnerRoute role={roleInfo}>
+                <OwnerHealth />
+              </ShopOwnerRoute>
+            }
+          />
           <Route
             path="menu"
             element={

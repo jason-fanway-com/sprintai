@@ -1,5 +1,5 @@
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Users, MessageSquare, LogOut, Zap, Store, ShieldCheck, Activity, AlertTriangle, FlaskConical, Menu, X, DollarSign, Monitor, Gift, UtensilsCrossed, Settings } from 'lucide-react'
+import { LayoutDashboard, Users, MessageSquare, LogOut, Zap, Store, ShieldCheck, Activity, AlertTriangle, FlaskConical, Menu, X, DollarSign, Monitor, Gift, UtensilsCrossed, Settings, HeartPulse } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import type { User } from '@supabase/supabase-js'
@@ -43,9 +43,7 @@ const shopOwnerNav = [
   { to: '/customers', label: 'Customers', icon: Users },
   { to: '/expo', label: 'Expo Screen', icon: Monitor },
   { to: '/conversations', label: 'Conversation', icon: MessageSquare },
-  { to: '/conversation-quality', label: 'Quality', icon: ShieldCheck },
-  { to: '/test-suite', label: 'Production Readiness', icon: FlaskConical },
-  { to: '/issues', label: 'Issues', icon: AlertTriangle },
+  { to: '/health', label: 'Health', icon: HeartPulse },
   { to: '/financial-reporting', label: 'Financial Reporting', icon: DollarSign },
   { to: '/demo-kit', label: 'Demo Kit', icon: Gift },
 ]
@@ -55,8 +53,7 @@ const shopOwnerBottomNav = [
   { to: '/shop-owner', label: 'Glance', icon: LayoutDashboard },
   { to: '/expo', label: 'Orders', icon: Monitor },
   { to: '/conversations', label: 'Chats', icon: MessageSquare },
-  { to: '/test-suite', label: 'Readiness', icon: FlaskConical },
-  { to: '/issues', label: 'Issues', icon: AlertTriangle },
+  { to: '/health', label: 'Health', icon: HeartPulse },
 ]
 
 export default function Layout({ user, role: _role }: LayoutProps) {
