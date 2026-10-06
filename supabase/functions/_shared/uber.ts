@@ -223,6 +223,9 @@ export function makeUberProvider(cfg: UberConfig, fetchImpl: typeof fetch = fetc
         manifest_items: req.items.map((i) => ({ name: i.name, quantity: i.qty, size: "small" })),
         manifest_total_value: req.order_value_cents ?? 0,
         tip: req.tip_cents,
+        // leave at the door by default, and if nobody answers too: a returned order costs a second delivery fee (Jason 2026-10-06)
+        deliverable_action: "deliverable_action_leave_at_door",
+        undeliverable_action: "leave_at_door",
         pickup_ready_dt: req.pickup_ready_at,
         external_id: req.external_id,
         ...(cfg.robo ? { test_specifications: { robo_courier_specification: { mode: "auto" } } } : {}),

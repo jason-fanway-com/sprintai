@@ -38,6 +38,7 @@ import type { OrderForm as EngineOrderForm } from "./engine/form.ts";
 import { googleGeocoder, localityOf } from "./engine/address.ts";
 import { createCheckoutSession, buildEngineCheckoutSessionInput, appendCheckoutLink, type CheckoutLineItemInput } from "./checkout-session.ts";
 import { claimDeliveryNotice, deliveryForCart, NOTICE_STATUSES, type DeliveryRow } from "../_shared/delivery-store.ts";
+import { T } from "./engine/templates.ts";
 import { providerFor } from "../_shared/delivery-providers.ts";
 import { e164OrNull, isQuoteError } from "../_shared/delivery.ts";
 
@@ -462,6 +463,8 @@ function jsonError(message: string, status = 400): Response {
 function shopPausedNow(shop: { is_paused: boolean; paused_until?: string | null }): boolean {
   return shop.is_paused === true && (!shop.paused_until || new Date(shop.paused_until) > new Date());
 }
+
+const PAID_CANCEL = new Set(["cancel", "cancel order", "cancel my order", "cancel the order", "cancel it", "cancel that", "please cancel", "please cancel my order", "i want to cancel", "i want to cancel my order", "i need to cancel", "i need to cancel my order", "can i cancel", "can i cancel my order", "cancel please", "cancel my order please", "nevermind cancel", "never mind cancel"]);
 
 function getBusinessDate(timezone: string): string {
   return getBusinessDateAt(new Date(), timezone);
@@ -2122,6 +2125,26 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
   }
 
   try {
+
+  // ── "Cancel" after paying ─────────────────────────────────────────────────
+  // A paid order is the shop's: a new message starts a new cart, so "cancel my order" would otherwise cancel that empty
+  // cart and sound like it worked. Point the customer to the shop instead (Jason 2026-10-06). "reset" still resets.
+  if (PAID_CANCEL.has(userMessage.trim().toLowerCase().replace(/[^a-z ]/g, "").replace(/\s+/g, " "))) {
+    const { data: paid } = await supabase.from("order_carts").select("id, order_number, order_type, delivery_fee_cents")
+      .eq("conversation_id", conversation.id).eq("payment_status", "paid").gte("created_at", new Date(Date.now() - 6 * 3600_000).toISOString())
+      .order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (paid) {
+      const d = (paid as { order_type?: string }).order_type === "delivery" ? await deliveryForCart(supabase, (paid as { id: string }).id).catch(() => null) : null;
+      const enRoute = !!d && (d.status === "courier_assigned" || d.status === "picked_up");
+      const fee = (paid as { delivery_fee_cents?: number }).delivery_fee_cents ?? 0;
+      const phone = shop.phone_number_e164 ? shop.phone_number_e164.replace(/^\+1(\d{3})(\d{3})(\d{4})$/, "($1) $2-$3") : null;
+      const reply = T.paidCancel(shop.name, phone, (paid as { order_number?: number | null }).order_number ?? null, enRoute, fee > 0 ? `$${(fee / 100).toFixed(2)}` : null);
+      await saveMessage(supabase, conversation.id, shop.tenant_id, "customer", userMessage);
+      const savedMsgId = (await saveMessage(supabase, conversation.id, shop.tenant_id, "assistant", reply)).id;
+      if (isSms) { await sendSms(supabase, shop.tenant_id, inboundReplyCtx, replyProvider, shop.phone_number_e164!, customerPhone, reply, savedMsgId); return emptyTwiml(); }
+      return jsonResponse({ reply, cart: [], phase: "confirmed", session_id: sessionId });
+    }
+  }
 
   // ── Find or create order cart ─────────────────────────────────────────────
   const { data: existingCart } = await supabase

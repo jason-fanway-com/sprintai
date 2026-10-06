@@ -117,6 +117,9 @@ export const T = {
     const list = c >= 1 || choices.length <= 5 ? ` ${orList(choices)}?` : ` For example ${choices.slice(0, 3).join(", ")}. Reply OPTIONS to hear them all.`;
     return `${itemName}: ${groupPrompt}?${list}`;
   },
+  // "cancel" after paying: the order is the shop's now (Jason 2026-10-06); OrderFare never cancels or refunds
+  paidCancel: (shop: string, phone: string | null, orderNumber: number | null, driverEnRoute: boolean, deliveryFee: string | null) =>
+    `Your order${orderNumber ? ` #${orderNumber}` : ""} is already with ${shop}${driverEnRoute ? " and your driver is on the way" : ""}. To cancel, call ${phone ? `${shop} at ${phone}` : shop}.${driverEnRoute && deliveryFee ? ` The ${deliveryFee} delivery fee can't be refunded because the driver is already en route.` : " They'll let you know if it can still be stopped."}`,
   soldOut: (name: string) => `Sorry, we're out of ${name} today.`,
   sideIncluded: (side: string, owner: string) => `Do you want the ${side} that come with the ${owner}, or an additional order of ${side}? Reply EXTRA for another order, or NO.`,
   omission: (spans: string[]) => `Did you also want ${orList(spans).replace(" or ", " and ")}? Reply YES or NO.`,
