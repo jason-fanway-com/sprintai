@@ -77,6 +77,7 @@ demo shop, a decision only he can make, or something he asked for being ready. R
 | **Vito's Pizza** | The demo shop. Hand-built menu, Telnyx SMS, **the canary**. Which ordering engine it runs is a per-shop flag — read `shops.turn_engine_enabled` (§5), never this table |
 | **Zio's Pizzeria** | Slice-imported menu, compiled engine, **web only — no phone by Jason's decision**. Proof that an imported menu can be made conversation-ready |
 | **Not Just Bagels** | Pre-prod, like every other shop. Twilio, 10DLC-approved. Intended as an early sale, but has NO live customers — do not treat it as production or gate work on it (Jason, 2026-09-12). Its menu is hand-corrected, so do not re-import it casually |
+| **FNA's Grille** | **The first real customer** (Bethlehem PA; Wed–Sat 4–9 PM; Uber delivery). `is_test` false, no phone number yet, owner details pending. Its menu is reproducible from a commit: `menu-pipeline/fixtures/fnas-grille-menu.csv` → `import-menu-csv`, then `scripts/fnas-setup-20261006.py --apply` and `scripts/fnas-terms-20261006.py --apply`. Steak-or-chicken sandwiches are two rows each (the meat names the item). Test it over the web with TESTMODE |
 
 **The first real customer is being onboarded (Jason, 2026-10-06).** Add it to this table
 with its role the day its row exists. Vito's is `is_test`: always test Stripe, Uber sandbox,
