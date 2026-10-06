@@ -106,7 +106,7 @@ def build_vcard(shop: dict) -> str:
 
 
 def build_dashboard_url(shop: dict) -> str:
-    return f"{PUBLIC_SITE_URL}/admin/shop-owner?shop={urllib.parse.quote(shop['slug'])}"
+    return f"{PUBLIC_SITE_URL}/admin/menu?shop={urllib.parse.quote(shop['slug'])}"
 
 
 def qr_png(payload: str) -> bytes:

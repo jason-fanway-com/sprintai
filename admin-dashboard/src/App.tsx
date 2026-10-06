@@ -157,11 +157,20 @@ export default function App() {
               </ShopOwnerRoute>
             }
           />
+          <Route path="menu-settings" element={<Navigate to="/menu" replace />} />
           <Route
-            path="menu-settings"
+            path="menu"
             element={
               <ShopOwnerRoute role={roleInfo}>
-                <ShopOwnerMenuSettings />
+                <ShopOwnerMenuSettings key="menu" page="menu" />
+              </ShopOwnerRoute>
+            }
+          />
+          <Route
+            path="settings"
+            element={
+              <ShopOwnerRoute role={roleInfo}>
+                <ShopOwnerMenuSettings key="settings" page="settings" />
               </ShopOwnerRoute>
             }
           />

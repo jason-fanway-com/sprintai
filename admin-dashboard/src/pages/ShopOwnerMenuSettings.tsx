@@ -32,12 +32,12 @@ interface ShopRow {
   tenant_id: string
 }
 
-export default function ShopOwnerMenuSettings() {
+export default function ShopOwnerMenuSettings({ page = 'menu' }: { page?: Tab }) {
   const { tenantId, isShopOwner, isSuperAdmin } = useRole()
   const { mode, previewTenantId, setMode, setPreview } = useView()
   const [searchParams] = useSearchParams()
   const qc = useQueryClient()
-  const [tab, setTab] = useState<Tab>('menu')
+  const tab: Tab = page // Menu and Settings are separate pages (Jason 2026-10-05)
   const [showChat, setShowChat] = useState(false)
 
   const previewing = isSuperAdmin && mode === 'owner'
@@ -248,28 +248,6 @@ export default function ShopOwnerMenuSettings() {
           >
             <MessageSquare className="w-4 h-4" />
             {showChat ? 'Hide chat' : 'Talk to your menu'}
-          </button>
-        </div>
-
-        {/* Tabs */}
-        <div className="flex border-b border-gray-200">
-          <button
-            onClick={() => setTab('menu')}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-              tab === 'menu' ? 'border-brand-600 text-brand-600' : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            <UtensilsCrossed className="w-4 h-4" />
-            Menu
-          </button>
-          <button
-            onClick={() => setTab('settings')}
-            className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-              tab === 'settings' ? 'border-brand-600 text-brand-600' : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            <Settings className="w-4 h-4" />
-            Settings
           </button>
         </div>
 

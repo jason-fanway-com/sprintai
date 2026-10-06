@@ -83,7 +83,7 @@ export function buildVCard(shop: DemoKitShop): string {
  * `?shop=` accepts a slug — ShopOwnerDashboard resolves slug → id.
  */
 export function buildOwnerDashboardUrl(shop: DemoKitShop): string {
-  return `${PUBLIC_SITE_URL}/admin/shop-owner?shop=${encodeURIComponent(shop.slug)}`
+  return `${PUBLIC_SITE_URL}/admin/menu?shop=${encodeURIComponent(shop.slug)}`
 }
 
 /** Serialize a live <svg> node and hand it to the browser as a download. */

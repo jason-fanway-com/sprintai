@@ -119,7 +119,7 @@ async function getCustomers(
   const search = (params.get("search") ?? "").trim();
   const sortField = params.get("sort") ?? "last_order_at";
   const sortDir = params.get("dir") === "asc" ? "asc" : "desc";
-  const allowedSorts = new Set(["last_order_at", "order_count", "total_spent_cents"]);
+  const allowedSorts = new Set(["name", "last_order_at", "order_count", "total_spent_cents"]);
   const safeSort = allowedSorts.has(sortField) ? sortField : "last_order_at";
 
   // Fetch the FULL tenant customer set — the summary line (AC: total/returning/
@@ -188,8 +188,9 @@ async function getCustomers(
   }
 
   filtered.sort((a, b) => {
-    const av = a[safeSort as "last_order_at" | "order_count" | "total_spent_cents"];
-    const bv = b[safeSort as "last_order_at" | "order_count" | "total_spent_cents"];
+    // "name": A-Z by name, unnamed customers by phone after the named ones
+    const key = (c: typeof a) => safeSort === "name" ? (c.name ? `0${c.name.toLowerCase()}` : `1${c.phone_display}`) : c[safeSort as "last_order_at" | "order_count" | "total_spent_cents"];
+    const av = key(a), bv = key(b);
     const cmp = av === bv ? 0 : (av ?? "") < (bv ?? "") ? -1 : 1;
     return sortDir === "asc" ? cmp : -cmp;
   });

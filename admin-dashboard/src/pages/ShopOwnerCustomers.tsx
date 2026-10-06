@@ -45,7 +45,7 @@ interface CustomersResponse {
   summary: { total: number; returning: number; regulars: number }
 }
 
-type SortField = 'last_order_at' | 'order_count' | 'total_spent_cents'
+type SortField = 'name' | 'last_order_at' | 'order_count' | 'total_spent_cents'
 
 function money(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`
@@ -109,7 +109,7 @@ export default function ShopOwnerCustomers() {
   const { isOwnerView, effTenant } = useEffectiveTenant()
   const [shopId, setShopId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
-  const [sort, setSort] = useState<SortField>('last_order_at')
+  const [sort, setSort] = useState<SortField>('name') // every customer once, A-Z (Jason 2026-10-05)
 
   const { data: shops, isLoading: shopsLoading } = useQuery<Shop[]>({
     queryKey: ['customers-owner-shops', effTenant],
@@ -134,7 +134,7 @@ export default function ShopOwnerCustomers() {
     queryKey: ['customer-crm', shop?.id, search, sort],
     queryFn: async () => {
       const headers = await getAuthHeaders()
-      const params = new URLSearchParams({ sort, dir: 'desc' })
+      const params = new URLSearchParams({ sort, dir: sort === 'name' ? 'asc' : 'desc' })
       if (search.trim()) params.set('search', search.trim())
       const res = await fetch(`${CUSTOMER_CRM_URL}/${shop!.id}/customers?${params}`, { headers })
       if (!res.ok) {
@@ -209,8 +209,8 @@ export default function ShopOwnerCustomers() {
         </div>
         <div className="inline-flex rounded-lg border border-gray-200 bg-white p-0.5">
           {([
-            ['last_order_at', 'Recent'],
-            ['order_count', 'Orders'],
+            ['name', 'Customers'],
+            ['last_order_at', 'Orders (most recent first)'],
             ['total_spent_cents', 'Spent'],
           ] as Array<[SortField, string]>).map(([field, label]) => (
             <button

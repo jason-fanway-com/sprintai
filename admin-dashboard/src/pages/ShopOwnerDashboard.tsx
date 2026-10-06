@@ -586,7 +586,7 @@ export default function ShopOwnerDashboard() {
           <div className="bg-white rounded-2xl border border-amber-200 shadow-sm overflow-hidden lg:sticky lg:top-6">
             <div className="bg-amber-50 border-b border-amber-200 px-4 py-2.5 flex items-center gap-2">
               <MessageSquare className="w-4 h-4 text-amber-600" />
-              <span className="text-sm font-semibold text-amber-800">Test your assistant</span>
+              <span className="text-sm font-semibold text-amber-800">Test your order taker agent</span>
             </div>
             <div className="px-4 py-2 bg-amber-50/50 border-b border-amber-100">
               <p className="text-xs text-amber-700">
