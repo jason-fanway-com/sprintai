@@ -120,3 +120,6 @@ verify_jwt = false  # Called from the public, unauthenticated /try page with no
                     # holds the service role internally and enforces the kill
                     # switch, the live-shop guard, and all rate limits itself
                     # on every request. See docs/specs/2026-09-05-public-tester-BUILD.md.
+
+[functions.access-request]
+verify_jwt = false  # the approve page has no session; the emailed one-time token is the proof

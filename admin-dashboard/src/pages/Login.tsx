@@ -20,8 +20,10 @@ export default function Login({ user }: LoginProps) {
 
   useEffect(() => {
     if (!user) return
-    const { isShopOwner } = getUserRole(user)
-    if (isShopOwner) {
+    const { isShopOwner, role } = getUserRole(user)
+    if (!role) {
+      navigate('/request-access', { replace: true }) // signed in, no role yet
+    } else if (isShopOwner) {
       navigate('/shop-owner', { replace: true })
     } else {
       navigate('/dashboard', { replace: true })
@@ -46,7 +48,7 @@ export default function Login({ user }: LoginProps) {
       const { error: authError } = await supabase.auth.signInWithOtp({
         email,
         options: {
-          emailRedirectTo: `${window.location.origin}/dashboard`,
+          emailRedirectTo: `${window.location.origin}${import.meta.env.BASE_URL}`, // the admin lives under /admin/
         },
       })
       setLoading(false)

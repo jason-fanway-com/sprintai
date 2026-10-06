@@ -32,6 +32,8 @@ import ShopOwnerCustomers from './pages/ShopOwnerCustomers'
 import TestSuite from './pages/TestSuite'
 import FinancialReporting from './pages/FinancialReporting'
 import ExpoScreen from './pages/ExpoScreen'
+import RequestAccess from './pages/RequestAccess'
+import ApproveAccess from './pages/ApproveAccess'
 
 // ── route guards ────────────────────────────────────────────────────────────
 // Every protected route uses one of these. Navigation links hiding is
@@ -48,8 +50,8 @@ function ShopOwnerRoute({ children, role }: { children: React.ReactNode; role: U
   return <>{children}</>
 }
 
-function ProtectedRoute({ children, role }: { children: React.ReactNode; role: UserRoleInfo }) {
-  if (!role.role) return <Navigate to="/login" replace />
+function ProtectedRoute({ children, role }: { children: React.ReactNode; role: UserRoleInfo & { signedIn?: boolean } }) {
+  if (!role.role) return <Navigate to={role.signedIn ? "/request-access" : "/login"} replace /> // signed in with no role: ask for access
   return <>{children}</>
 }
 
@@ -93,10 +95,12 @@ export default function App() {
       <Toaster position="top-right" />
       <Routes>
         <Route path="/login" element={<Login user={user} />} />
+        <Route path="/approve-access" element={<ApproveAccess />} />
+        <Route path="/request-access" element={user ? (roleInfo.role ? <Navigate to="/" replace /> : <RequestAccess user={user} />) : <Navigate to="/login" replace />} />
         <Route
           path="/"
           element={
-            <ProtectedRoute role={roleInfo}>
+            <ProtectedRoute role={{ ...roleInfo, signedIn: !!user }}>
               <Layout user={user} role={roleInfo} />
             </ProtectedRoute>
           }
