@@ -97,6 +97,7 @@ Deno.serve(async (req: Request) => {
   } else {
     await supabase.from("menus").update({ import_hash: plan.importHash }).eq("id", menuId);
   }
+  if (!menuId) return jsonError("Failed to resolve menu id", 500);
 
   // -- Load existing items for diff -------------------------------------------
   const { data: existingItemsRaw } = await supabase
