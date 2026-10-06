@@ -213,7 +213,7 @@ export default function ShopOwnerDemoKit() {
       <div className="p-8 text-center py-16 text-gray-400">
         <Store className="w-12 h-12 mx-auto mb-3 opacity-30" />
         <p className="font-medium">No shop assigned</p>
-        <p className="text-sm mt-1">Contact SprintAI support to set up your restaurant.</p>
+        <p className="text-sm mt-1">Contact OrderFare to set up your restaurant.</p>
       </div>
     )
   }
@@ -257,16 +257,17 @@ export default function ShopOwnerDemoKit() {
       <div className="bg-white rounded-xl border border-gray-200 p-6">
         <h2 className="text-base font-semibold text-gray-900 mb-2">The pitch, in a sentence</h2>
         <p className="text-sm text-gray-600 leading-relaxed">
-          Sprint gives {shop.name} a dedicated text-ordering number. Customers text it like
+          OrderFare gives {shop.name} a dedicated text-ordering number. Customers text it like
           they'd text a friend — no app to download, no account to create. You keep your
           customers, your margin, and your name on the sale.
         </p>
         <div className="mt-4 bg-brand-50 border border-brand-100 rounded-lg p-4">
-          <p className="text-xs font-semibold text-brand-700 uppercase tracking-wide mb-1">The numbers</p>
+          <p className="text-xs font-semibold text-brand-700 uppercase tracking-wide mb-1">The offer</p>
           <p className="text-sm text-gray-700 leading-relaxed">
-            Aggregators take 15–30% per order. Sprint is $99/mo + $0.99 per order, paid by the
-            customer. On $10,000 in monthly orders, DoorDash keeps about $2,500 — Sprint costs
-            about $200. That's $2,300 a month back in your pocket.
+            Design partners get the first six months free. We only take a handful of design partners,
+            and we stay with each one until it's perfect. After that it's $99 a month. The $1.49
+            per-order fee is paid by the customer, not the shop. Aggregators take 15–30% of every
+            order; on $10,000 a month, DoorDash keeps about $2,500.
           </p>
         </div>
       </div>
@@ -322,7 +323,7 @@ export default function ShopOwnerDemoKit() {
           badge="QR 2"
           icon={<UserPlus className="w-4 h-4 text-brand-600" />}
           title={`Add ${shop.name} to your contacts`}
-          blurb="One tap saves the shop to their phone. After the first order Sprint asks the customer to save the contact — customers who do are far more likely to order again."
+          blurb="One tap saves the shop to their phone. After the first order OrderFare asks the customer to save the contact — customers who do are far more likely to order again."
           payload={vcard}
           qrId="demo-qr-vcard"
           downloadName={`${shop.slug}-contact-card.svg`}
@@ -351,8 +352,8 @@ export default function ShopOwnerDemoKit() {
         <KitCard
           badge="QR 3"
           icon={<LayoutDashboard className="w-4 h-4 text-brand-600" />}
-          title="Talk to the shop as admin"
-          blurb="Opens this dashboard, scoped to your shop. Show them where they manage items, mark things sold out, pause ordering when the kitchen is slammed, and watch orders come in."
+          title="Talk to your shop"
+          blurb="Opens the owner's menu page with the Talk to your shop chat. Say it in plain English: 86 an item, change an option, pause delivery, close for the rest of the day."
           payload={dashUrl}
           qrId="demo-qr-admin"
           downloadName={`${shop.slug}-owner-dashboard.svg`}
@@ -373,7 +374,7 @@ export default function ShopOwnerDemoKit() {
       <div className="bg-white rounded-xl border border-gray-200 p-6">
         <h2 className="text-base font-semibold text-gray-900 mb-1">The walkthrough</h2>
         <p className="text-sm text-gray-500 mb-5">
-          Six steps, about five minutes. Run it in this order.
+          Seven steps, about ten minutes. Run it in this order.
         </p>
         <ol className="space-y-4">
           {[
@@ -383,23 +384,27 @@ export default function ShopOwnerDemoKit() {
             },
             {
               t: 'Order as a customer (QR 1)',
-              d: `“Scan this with your camera — it opens a text to the Sprint line. Order something, just like a customer would.” Point out that it understands plain language, confirms line items, remembers past orders, totals the cart, and sends a payment link.`,
+              d: `“Scan this with your camera — it opens a text to our demo shop. Order something, just like a customer would.” Try a cheesesteak, wings and garlic knots for delivery. Point out that it understands plain language, asks the right questions (which cheese, any toppings), reads the order back with the total, and sends a payment link. Every demo order is a test: pay with 4242 4242 4242 4242, any future date, any 3 digits.`,
             },
             {
-              t: 'Show the dashboard (QR 3)',
-              d: `“This is where you run the shop. See the incoming orders. Mark something sold out. Pause ordering if the kitchen gets slammed. All from your phone.”`,
+              t: 'Watch it get delivered',
+              d: `For delivery, use an address near our demo shop in Allentown (for example 3300 Hamilton Blvd). Once it's paid, OrderFare books an Uber courier; in demo mode a simulated driver arrives in a few minutes. The customer gets the tracking link, then “on its way” and “delivered” texts, all from the shop. “Uber delivers it, and your customer only ever hears from you.”`,
+            },
+            {
+              t: 'Talk to your shop (QR 3)',
+              d: `“This is how you run it. Just say it: 86 the tuna melt. Pause delivery for an hour. We're closed for the rest of the day.” It's all from your phone, in plain English.`,
             },
             {
               t: 'Save the contact (QR 2)',
-              d: `“After one order, Sprint gets the customer to save the shop as a contact. That's the whole ballgame — customers with you saved in their phone reorder far more than customers who find you through an app.”`,
+              d: `“After one order, OrderFare gets the customer to save the shop as a contact. That's the whole ballgame — customers with you saved in their phone reorder far more than customers who find you through an app.”`,
             },
             {
               t: 'The pitch',
-              d: `“You keep your customers, your margin, and your name on the sale. No aggregator taking 30%. It's AI, so it won't be perfect — but we test every shop before go-live, we show you those tests, and we watch quality every single day. $99 a month. $0.99 an order. No contract. Cancel anytime.”`,
+              d: `“You keep your customers, your margin, and your name on the sale. No aggregator taking 30%. We want you as a design partner: six months free. We only take a handful of design partners, and we stay with you until it's perfect. We set up your menu, you test it as long as you like, and you only go live when you're happy. After six months it's $99 a month. Your customers pay a $1.49 order fee; you don't. No contract.”`,
             },
             {
               t: 'Close',
-              d: `“Want your own line? Let's get you signed up — takes 15 minutes right now.”`,
+              d: `“Want to be a design partner? Let's get you signed up.”`,
             },
           ].map((s, i) => (
             <li key={s.t} className="flex gap-3">
@@ -416,7 +421,7 @@ export default function ShopOwnerDemoKit() {
       </div>
 
       <p className="text-xs text-gray-400 text-center pb-4">
-        Sprint — SMS ordering for family-owned restaurants
+        OrderFare — text ordering for family-owned restaurants
       </p>
     </div>
   )
