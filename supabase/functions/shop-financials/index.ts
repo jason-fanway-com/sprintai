@@ -899,9 +899,7 @@ Deno.serve(async (req: Request) => {
     if (!isAdmin && !ownerTenant) {
       return apiError("Forbidden - this account has no shop", 403);
     }
-    callerTenantId = isAdmin
-      ? ((user.app_metadata?.tenant_id as string) || (user.user_metadata?.tenant_id as string) || null)
-      : ownerTenant!;
+    callerTenantId = isAdmin ? null : ownerTenant!; // a platform admin sees every shop (a home tenant_id on the admin account was scoping Jason to one shop: "Not found")
   }
 
   try {
