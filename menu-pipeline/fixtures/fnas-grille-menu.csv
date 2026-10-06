@@ -32,9 +32,12 @@ Burgers,Bacon n Bleu Burger,,13.50,"8oz burger with lettuce, tomato, bacon & ble
 Burgers,Mushroom Swiss Turkey Burger,,13.00,6oz turkey burger with mushrooms & Swiss cheese on a kaiser roll. Served with housemade chips,,"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
 Burgers,The Philly Special,,14.50,"8oz burger with steak meat, onions & Cooper cheese on a kaiser roll. Served with housemade chips",,"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
 Burgers,Bacon Cooper Sub,,13.50,"8oz burger with lettuce, tomato, bacon, Cooper cheese & mayo on a steak roll. Served with housemade chips",,"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
-Handhelds,Cooper Cheese Steak,,15.00,Onions & Cooper cheese on a regular or seeded roll. Served with housemade chips,which meat (steak or chicken); which roll (regular roll or seeded roll),"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
-Handhelds,LV Cheese Steak,,16.00,"Onions, sauce, pickles, banana peppers & Cooper cheese on a regular or seeded roll. Served with housemade chips",which meat (steak or chicken); which roll (regular roll or seeded roll),"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
-Handhelds,Beer Cheese Steak,,15.50,"Sweet peppers, onion straws & beer cheese on a regular or seeded roll. Served with housemade chips",which meat (steak or chicken); which roll (regular roll or seeded roll),"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Handhelds,Cooper Cheese Steak,,15.00,Onions & Cooper cheese on a regular or seeded roll. Served with housemade chips,which roll (regular roll or seeded roll),"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Handhelds,Cooper Chicken Cheese Steak,,15.00,Onions & Cooper cheese on a regular or seeded roll. Served with housemade chips,which roll (regular roll or seeded roll),"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Handhelds,LV Cheese Steak,,16.00,"Onions, sauce, pickles, banana peppers & Cooper cheese on a regular or seeded roll. Served with housemade chips",which roll (regular roll or seeded roll),"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Handhelds,LV Chicken Cheese Steak,,16.00,"Onions, sauce, pickles, banana peppers & Cooper cheese on a regular or seeded roll. Served with housemade chips",which roll (regular roll or seeded roll),"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Handhelds,Beer Cheese Steak,,15.50,"Sweet peppers, onion straws & beer cheese on a regular or seeded roll. Served with housemade chips",which roll (regular roll or seeded roll),"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Handhelds,Beer Chicken Cheese Steak,,15.50,"Sweet peppers, onion straws & beer cheese on a regular or seeded roll. Served with housemade chips",which roll (regular roll or seeded roll),"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
 Handhelds,Black Diamond Cheese Steak,,15.00,"Mushrooms, onions & Cooper cheese on a regular or seeded roll. Served with housemade chips",which roll (regular roll or seeded roll),"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
 Handhelds,Chix Bacon Ranch Hoagie,,14.00,"Iceberg, ranch, cherry tomatoes, bacon & cheddar cheese on a regular roll. Served with housemade chips",,"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
 Handhelds,Smoked Pulled Pork Sandwich,,13.00,"Slaw, pickles & BBQ sauce on a Portuguese roll. Served with housemade chips",,"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
@@ -61,8 +64,6 @@ Wing Sauces,Jalapeno Cowboy Butter,,0.00,,,
 Wing Sauces,Hot Honey Garlic Sweet Chili,,0.00,,,
 Wing Dip Choice,Bleu Cheese,,0.00,,,
 Wing Dip Choice,Ranch,,0.00,,,
-Steak or Chicken Choice,Steak,,0.00,,,
-Steak or Chicken Choice,Chicken,,0.00,,,
 Roll Choice,Regular Roll,,0.00,,,
 Roll Choice,Seeded Roll,,0.00,,,
 Entree Side Choice,Veggie,,0.00,,,
