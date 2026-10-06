@@ -252,7 +252,7 @@ export function turn(input: TurnInput): TurnOutput {
   ledger.push(...res.ledger);
 
   // 4. bind every line as far as the data allows
-  const before = new Map(input.form.lines.map((l) => [l.line_id, JSON.stringify(l)]));
+  const before = new Map(input.form.lines.map((l) => [l.line_id, JSON.stringify(l)])), gone = res.removed.length === 1 ? menu.items.get(res.removed[0].item_id ?? "") : undefined; if (gone) for (const l of form.lines) { if (before.has(l.line_id) || l.item_id !== null || resolveSpan(l.span, menu).kind === "item") continue; const r = resolveSpan(`${gone.display_name} ${l.span}`, menu); if (r.kind === "item" && r.id !== gone.id && menu.items.get(r.id)?.category === gone.category) l.span = `${gone.display_name} ${l.span}`; } // "make it chicken" for the Cooper Cheese Steak: a replacement is read against the line it replaced before the whole menu
   for (const l of form.lines) bindLine(l, menu);
   // identical lines merge: "add two more hot dogs" is 3 × Hot Dog on one ticket row, not two rows
   for (let i = 0; i < form.lines.length; i++) for (let j = form.lines.length - 1; j > i; j--) {
