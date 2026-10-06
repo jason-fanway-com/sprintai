@@ -27,8 +27,8 @@ function makeFakeStripe() {
   const stripe: any = {
     checkout: {
       sessions: {
-        create(params: Record<string, unknown>) {
-          createCalls.push(params);
+        create(params: Record<string, unknown>, opts?: Record<string, unknown>) {
+          createCalls.push({ ...params, _opts: opts });
           const id = `sess_${createCalls.length}`;
           return Promise.resolve({ id, url: `https://checkout.stripe.com/${id}` });
         },
@@ -202,4 +202,23 @@ Deno.test("buildEngineCheckoutSessionInput: sums only real cart lines, ignores a
   assertEquals(built.tipCents, 200);
   assertEquals(built.notes, "ring bell");
   assertEquals(built.lineItems[1].description, "Extra crispy");
+});
+
+Deno.test("split: on the shop's account OrderFare takes $1.49 + Uber delivery + tip, less 2.9% of that; a real order never falls back to OrderFare's account", async () => {
+  const base = { cartId: "cart_1", shopName: "Vito's Pizza", lineItems: [{ name: "Large Pepperoni Pizza", quantity: 1, unitAmountCents: 2100 }], subtotalCents: 2100, serviceFeeCents: SERVICE_FEE_CENTS, deliveryFeeCents: 799, tipCents: 300, taxCents: 126, orderType: "delivery" as const };
+  const uber = makeFakeStripe();
+  const r1 = await createCheckoutSession({ ...base, testMode: false, connectedAccountId: "acct_shop", courierDelivery: true }, { supabase: makeFakeSupabase().supabase, stripe: uber.stripe });
+  assert(r1.ok);
+  const share = 149 + 799 + 300; // 1248
+  assertEquals((uber.createCalls[0].payment_intent_data as Record<string, unknown>).application_fee_amount, share - Math.round(share * 0.029)); // 1212
+  assertEquals((uber.createCalls[0]._opts as Record<string, unknown>).stripeAccount, "acct_shop");
+  const own = makeFakeStripe();
+  await createCheckoutSession({ ...base, testMode: false, connectedAccountId: "acct_shop", courierDelivery: false }, { supabase: makeFakeSupabase().supabase, stripe: own.stripe });
+  assertEquals((own.createCalls[0].payment_intent_data as Record<string, unknown>).application_fee_amount, 149 - 4); // own drivers: the shop keeps delivery and tip
+  const none = makeFakeStripe();
+  const r3 = await createCheckoutSession({ ...base, testMode: false, connectedAccountId: null, liveMoney: true }, { supabase: makeFakeSupabase().supabase, stripe: none.stripe });
+  assert(!r3.ok); assertEquals(none.createCalls.length, 0);
+  const test = makeFakeStripe();
+  const r4 = await createCheckoutSession({ ...base, testMode: true, connectedAccountId: null }, { supabase: makeFakeSupabase().supabase, stripe: test.stripe });
+  assert(r4.ok); assertEquals(test.createCalls[0]._opts, undefined);
 });

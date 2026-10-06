@@ -53,6 +53,7 @@ export interface RunnerInput {
 export interface CheckoutRequest {
   cartId: string; shopName: string; testMode: boolean; cartLines: ReturnType<typeof toCartJson>;
   orderType: "pickup" | "delivery"; deliveryFeeCents: number; tipCents: number; taxCents: number; notes: string | null;
+  /** a courier (Uber) quoted this delivery: its fee and tip go to OrderFare */ courier: boolean;
 }
 /** a courier quote for a validated address; the adapter (index.ts) knows the shop, the provider and the credentials */
 export type QuoteDelivery = (req: { formatted: string; order_value_cents: number; cart_id: string; test: boolean }) =>
@@ -264,6 +265,7 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
     const res = await deps.createCheckout({
       cartId: input.cart.id, shopName: input.shop.name, testMode: input.cart.test_mode, cartLines: toCartJson(form, menu),
       orderType: form.fulfillment ?? "pickup", deliveryFeeCents: t.delivery_fee_cents, tipCents: t.tip_cents, taxCents: t.tax_cents, notes: input.cart.notes ?? null,
+      courier: form.fulfillment === "delivery" && !!form.address?.delivery_quote_id && !!form.address.delivery_courier && form.address.delivery_courier !== "own",
     });
     if (res.ok) {
       form.checkout_session_id = res.sessionId; form.checkout_url = res.url;

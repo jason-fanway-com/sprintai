@@ -34,6 +34,7 @@
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import type Stripe from "https://esm.sh/stripe@14.21.0?target=deno";
 import { SERVICE_FEE_CENTS } from "../_shared/connect.ts";
+import { platformShareCents } from "../_shared/fees.ts";
 /** The cart_json line shape (was TurnEngineCartLine / CompiledCartLine in the old engines). */
 export interface CartLine {
   menu_item_id: string;
@@ -73,6 +74,12 @@ export interface CreateCheckoutSessionInput {
   taxCents?:        number;
   orderType:         "pickup" | "delivery";
   notes?:            string;
+  /** the shop's Stripe account (Standard or Express): the charge is made there and the shop is the seller */
+  connectedAccountId?: string | null;
+  /** Uber (a courier) delivers: the delivery fee and tip go to OrderFare, which pays Uber */
+  courierDelivery?:  boolean;
+  /** the Stripe key moves real money (sk_live): then a charge must be on the shop's account */
+  liveMoney?:        boolean;
 }
 
 export interface CreateCheckoutSessionDeps {
@@ -172,6 +179,10 @@ export async function createCheckoutSession(
 
   const totalCents = input.subtotalCents + input.serviceFeeCents + input.deliveryFeeCents + input.tipCents + taxCents;
 
+  // The shop is the seller: a real order is charged on the shop's Stripe account, OrderFare taking its share as the
+  // application fee. Real money never falls back to OrderFare's own account (2026-10-06: every order was landing there).
+  if (!input.connectedAccountId && input.liveMoney) return { ok: false, error: "this shop is not set up to take payments yet" };
+  const applicationFee = input.connectedAccountId ? platformShareCents(input.serviceFeeCents, !!input.courierDelivery, input.deliveryFeeCents, input.tipCents) : 0;
   const session = await deps.stripe.checkout.sessions.create({
     mode:                 "payment",
     payment_method_types: ["card"],
@@ -179,12 +190,15 @@ export async function createCheckoutSession(
     metadata:             { order_cart_id: input.cartId, notes: input.notes ?? "" },
     custom_text:          { submit: { message: `Your order from ${input.shopName}${input.notes ? ` -- ${input.notes}` : ""}` } },
     // the card statement reads ORDERFARE + the shop, not the Stripe account's own descriptor (2026-09-26)
-    payment_intent_data:  { statement_descriptor: `ORDERFARE ${input.shopName}`.toUpperCase().replace(/[^A-Z0-9 ]/g, "").replace(/\s+/g, " ").trim().slice(0, 22).trim() },
+    payment_intent_data:  {
+      statement_descriptor: `ORDERFARE ${input.shopName}`.toUpperCase().replace(/[^A-Z0-9 ]/g, "").replace(/\s+/g, " ").trim().slice(0, 22).trim(),
+      ...(input.connectedAccountId ? { application_fee_amount: applicationFee } : {}),
+    },
     success_url:          input.testMode
       ? `https://getsprintai.com/order-success-test?cart=${input.cartId}`
       : `https://getsprintai.com/order-success?cart=${input.cartId}`,
     cancel_url:           `https://getsprintai.com/order-cancel?cart=${input.cartId}`,
-  });
+  }, input.connectedAccountId ? { stripeAccount: input.connectedAccountId } : undefined);
 
   await deps.supabase.from("order_carts").update({
     subtotal_cents:              input.subtotalCents,
@@ -235,6 +249,9 @@ export function buildEngineCheckoutSessionInput(params: {
   deliveryFeeCents?: number | null;
   tipCents?:         number | null;
   taxCents?:         number | null;
+  connectedAccountId?: string | null;
+  courierDelivery?:  boolean;
+  liveMoney?:        boolean;
 }): CreateCheckoutSessionInput {
   const realLines = params.cartLines.filter(l => typeof l.menu_item_id === "string");
 
@@ -261,6 +278,9 @@ export function buildEngineCheckoutSessionInput(params: {
     taxCents:         params.taxCents ?? 0,
     orderType:        params.orderType,
     notes:            params.notes ?? undefined,
+    connectedAccountId: params.connectedAccountId ?? null,
+    courierDelivery:  !!params.courierDelivery,
+    liveMoney:        !!params.liveMoney,
   };
 }
 

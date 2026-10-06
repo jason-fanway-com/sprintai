@@ -2520,6 +2520,9 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
             cartId: req.cartId, shopName: req.shopName, testMode: req.testMode,
             cartLines: req.cartLines, notes: req.notes,
             orderType: req.orderType, deliveryFeeCents: req.deliveryFeeCents, tipCents: req.tipCents, taxCents: req.taxCents,
+            connectedAccountId: (shop as { charges_enabled?: boolean; stripe_connected_account_id?: string | null }).charges_enabled ? (shop as { stripe_connected_account_id?: string | null }).stripe_connected_account_id ?? null : null,
+            courierDelivery: req.courier,
+            liveMoney: /^(sk|rk)_live_/.test(key),
           });
           const r = await createCheckoutSession(sessionInput, { supabase, stripe });
           return r.ok ? { ok: true, sessionId: r.sessionId, url: r.checkoutUrl } : { ok: false, error: r.error };
