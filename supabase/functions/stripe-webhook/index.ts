@@ -286,13 +286,15 @@ async function handleChargeRefunded(
 
   console.log(`[stripe-webhook] charge.refunded ${charge.id} → cart ${cart.id}: ${refundStatus} ($${(refunded / 100).toFixed(2)} of $${(amount / 100).toFixed(2)})`);
 
+  let outside = true; // refund-order texts the customer itself; a refund made outside OrderFare is texted from here
   // refunds belong in OrderFare, where the delivery money and Uber's charges are handled; one made straight in Stripe
   // is flagged for OrderFare to square up by hand (Jason 2026-10-06), never guessed at
   try {
     const key = (charge.livemode ? Deno.env.get("STRIPE_SECRET_KEY") : (Deno.env.get("STRIPE_TEST_SECRET_KEY") ?? Deno.env.get("STRIPE_SECRET_KEY"))) ?? "";
     const s = new Stripe(key, { apiVersion: "2023-10-16", httpClient: Stripe.createFetchHttpClient() });
     const list = await s.refunds.list({ charge: charge.id, limit: 10 }, connectedAccount ? { stripeAccount: connectedAccount } : undefined);
-    if (list.data.some((r: Stripe.Refund) => r.metadata?.orderfare !== "1")) {
+    outside = list.data.some((r: Stripe.Refund) => r.metadata?.orderfare !== "1");
+    if (outside) {
       const { data: sh } = await supabase.from("shops").select("tenant_id").eq("id", (cart as { shop_id?: string }).shop_id ?? "").maybeSingle();
       await supabase.from("issues").insert({
         tenant_id: (sh as { tenant_id?: string } | null)?.tenant_id ?? null, shop_id: (cart as { shop_id?: string }).shop_id ?? null, conversation_id: cart.conversation_id ?? null,
@@ -302,7 +304,7 @@ async function handleChargeRefunded(
     }
   } catch (e) { console.error("[stripe-webhook] refund-origin check failed:", e); }
 
-  if (cart.conversation_id) {
+  if (cart.conversation_id && outside) {
     // ALLOWED TRANSACTIONAL EXCEPTION #2 of 2 (lead directive 2026-06-22):
     // the REFUND NOTICE. This outbound directly follows the customer's own
     // paid order being refunded — a consented, expected transactional message.

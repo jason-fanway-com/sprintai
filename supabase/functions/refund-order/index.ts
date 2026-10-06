@@ -119,6 +119,13 @@ Deno.serve(async (req: Request) => {
     const { data: s } = await db.from("shops").select("balance_owed_cents").eq("id", shop.id).single();
     await db.from("shops").update({ balance_owed_cents: ((s as { balance_owed_cents?: number } | null)?.balance_owed_cents ?? 0) + plan.shopOwesCents }).eq("id", shop.id);
   }
+  // tell the customer now (the Stripe refund event may come late, or not at all for a test charge)
+  if (cart.conversation_id) {
+    await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/chat-sms`, {
+      method: "POST", headers: { Authorization: `Bearer ${Deno.env.get("SUPABASE_ANON_KEY") ?? ""}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ shop_id: shop.id, conversation_id: cart.conversation_id, order_cart_id: cartId, system_event: "order_refunded" }),
+    }).catch((e) => console.error("[refund-order] refund notice failed:", e));
+  }
   console.log(`[refund-order] cart ${cartId} by ${by}: customer ${plan.customerRefundCents} (food ${plan.foodRefundCents}, platform ${plan.platformRefundCents}), uber ${plan.uberChargeCents}, shop owes ${plan.shopOwesCents}`);
   return json({ ok: true, plan, refunded_cents: plan.customerRefundCents });
 });
