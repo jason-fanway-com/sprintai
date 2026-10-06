@@ -617,3 +617,15 @@ receipt carries the tracking link (no third text), cancel on a full refund, and 
 address, replaces the flat fee, is re-quoted right before the link (a moved fee goes out with the new total). Own-driver
 shops are unchanged. 584 tests pass; core 1,990 + files = 2,000/2,000 (net zero lines). Not verified against Uber's real
 sandbox yet: the credentials live only in Supabase secrets, so the probe and the end-to-end need a deploy or a local copy.
+
+**2026-10-06, Claude Code thread (Jason retired the Projects thread 10-01): Uber delivery, money split, refunds, terms.**
+Uber Direct runs end to end in the sandbox with OrderFare's own picked-up / delivered / canceled texts (Uber SMS off), and
+Uber is the default delivery. Checkout became a direct charge on the shop's connected Stripe account with OrderFare's share as
+the application fee (`_shared/fees.ts`, $1.49); a live-money charge can no longer land whole on the platform account. Refunds
+go only through `refund-order` under `_shared/refund-rules.ts` (courier cancelled first, shop-caused fees recovered from the
+next orders), which now requires the owner, an admin or the internal secret. Engine: options offered once, a bare word's usual
+item confirmed (`meta.primary_for`), included sides asked (`meta.includes`), 86 honoured, descriptions answered; Vito's menu
+made to mirror Jack's. Shop chat moved to Haiku 4.5 with forced tool use and now recompiles after edits. Terms v2026-10-06
+published with a sign-up acceptance and a go-live gate; access requests replace hand-made accounts. Jason: we have a first
+customer; the go-live list is in `~/Downloads/orderfare-handoff-2026-10-06.md` on the MacBook Pro. Not yet tested: the split
+and refunds on a real connected (test) account, which waits on Vito's being connected through Express.

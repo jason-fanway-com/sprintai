@@ -21,7 +21,7 @@ Christine, the usual?" — is something DoorDash and Slice structurally cannot o
 because they own the customer and the shop doesn't. That is why the customer CRM is
 strategic, not a nice-to-have.
 
-**Model:** $99/month per shop + $0.99 per consumer order. Referral-led. Erin is the sales
+**Model:** $99/month per shop + $1.49 per consumer order (`_shared/fees.ts` is the one source). Referral-led. Erin is the sales
 partner closing the first customers. **"Free until you flip"** — free setup, unlimited
 simulator testing, own-staff Test Kitchens; billing, the phone number and the in-store
 marketing kit all start at the flip.
@@ -77,6 +77,10 @@ demo shop, a decision only he can make, or something he asked for being ready. R
 | **Vito's Pizza** | The demo shop. Hand-built menu, Telnyx SMS, **the canary**. Which ordering engine it runs is a per-shop flag — read `shops.turn_engine_enabled` (§5), never this table |
 | **Zio's Pizzeria** | Slice-imported menu, compiled engine, **web only — no phone by Jason's decision**. Proof that an imported menu can be made conversation-ready |
 | **Not Just Bagels** | Pre-prod, like every other shop. Twilio, 10DLC-approved. Intended as an early sale, but has NO live customers — do not treat it as production or gate work on it (Jason, 2026-09-12). Its menu is hand-corrected, so do not re-import it casually |
+
+**The first real customer is being onboarded (Jason, 2026-10-06).** Add it to this table
+with its role the day its row exists. Vito's is `is_test`: always test Stripe, Uber sandbox,
+open 24/7, and it can never send a real courier or move real money.
 
 Roughly forty other shop rows are fictional test data. `is_test` distinguishes them —
 **check it before escalating anything as a real-money incident.**
@@ -151,6 +155,36 @@ Stripe → stripe-webhook → kitchen ticket + confirmation
   So harness load lands on the same account as the live path. The account **tops up
   automatically** (Jason, 2026-09-14) - do not raise the balance as a risk and do not
   throttle test runs to protect it.
+
+**Since 2026-10 (supersedes the turn-engine description above where they differ):**
+- The ordering engine is the **clean-sheet engine** in `chat-sms/engine/` (pure core,
+  2,000-line cap, customer text only in `templates.ts`, rules enforced by
+  `engine/tests/rules.test.ts`). The live branch is `delivery/uber-direct`; `main` lags it
+  until merged. Check the deployed commit stamp, never the branch name.
+- **Menu meta the engine reads:** `option_groups.ask_mode` (`offer_once` / `on_request`),
+  `menu_items.meta.primary_for` (the usual item for a bare word, confirmed with the
+  customer), `menu_items.meta.includes` (an included side; asked "the one that comes with
+  it, or an extra?"). 86'd items (`availability_overrides`) are never sold. Any option edit
+  needs a recompile, and shop chat does that itself.
+- **Money:** checkout is a direct charge on the **shop's** connected Stripe account with
+  `application_fee_amount` = OrderFare's share (`_shared/fees.ts`: $1.49 fee, plus delivery
+  + tip on Uber orders, minus 2.9% of that). A live-money charge without a connected account
+  is refused, never routed to the platform account. Standard (OAuth) vs Express is settled in
+  `docs/BUSINESS.md`.
+- **Refunds:** only through `refund-order` (Expo "Cancel / refund", or shop chat). The rules
+  are in `_shared/refund-rules.ts` and terms §5: courier cancelled first, the split re-planned
+  on what Uber actually charged, shop-caused courier fees put on `shops.balance_owed_cents`
+  and recovered from the next orders. A refund made directly in Stripe raises an issue.
+- **Delivery:** Uber Direct is the default (`delivery_provider`); shop drivers are a
+  deliberate setup choice made by OrderFare, not by shop chat. OrderFare sends the customer's
+  picked-up / delivered / canceled texts (`delivery-webhook` → chat-sms); Uber's own SMS is
+  off in the Uber dashboard. Bookings are leave-at-door.
+- **Shop chat (`admin-chat`)** runs Claude Haiku 4.5 (`CHAT_MODEL`) with forced tool use,
+  so every reply is an action. The ordering model is still set separately in chat-sms.
+- **Access:** new staff sign in by magic link and request access (`access-request`); Jason
+  approves by email. Nobody is added by hand in Supabase.
+- **Terms:** `_shared/terms.ts` holds `CURRENT_TERMS_VERSION`; sign-up stamps acceptance on
+  the shop and `go-live` gates on it. Changing terms.html means bumping the version.
 
 **Two ideas do most of the work:**
 - **Slots vs modifiers.** A *slot* must be answered (size, bread, temp); a *modifier* is
@@ -246,7 +280,12 @@ A fix that adds a path which can CHARGE a customer needs more than correctness t
 
 ## 4d. The critical path
 
-Cut by Jason 2026-09-06 to exactly two things, still current:
+**Since 2026-10-06: get the first real customer live.** The ordered go-live list (Stripe
+Connect on the shop's account, live keys, per-shop number and 10DLC, Uber production, owner-
+approved menu, terms accepted, ticket destination) is in the latest handoff doc in ~/Downloads
+on Jason's MacBook. Order correctness still outranks everything below.
+
+Earlier cut by Jason 2026-09-06, still true underneath:
 1. **The bot takes a normal order correctly.**
 2. **The Test Kitchen is fit to put in front of human testers.**
 
@@ -468,7 +507,7 @@ was carried in the data structure so the wrong thing had nowhere to go.
 2. Set the recurring watch (see the `orderfare` skill, or CronCreate every 6–12 min,
    courier health checked first).
 3. Run the canary before believing anything: Vito's `cheeseburger` / `medium` / `thats it`
-   → one line, Temp: Medium, **$8.49 + $0.99 = $9.48**. Read it from the cart or a
+   → one line, Temp: Medium, **$8.49 + $1.49 = $9.98**. Read it from the cart or a
    read-only receipt, not the checkout reply.
 4. Read `BLOCKED.txt` for what the crew thinks is happening — then verify it.
 
