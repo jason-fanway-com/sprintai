@@ -62,7 +62,7 @@ export function RevenueChart({ shopId, dateRange }: RevenueChartProps) {
   if (error) {
     return (
       <div className="bg-white rounded-xl border border-gray-200 p-4 mb-6">
-        <p className="text-sm text-red-500">Failed to load revenue chart.</p>
+        <p className="text-sm text-red-500">Failed to load revenue chart{error ? `: ${(error as Error).message}` : "."}</p>
       </div>
     );
   }

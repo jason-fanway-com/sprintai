@@ -894,12 +894,14 @@ Deno.serve(async (req: Request) => {
     }
     const user = await userRes.json();
     const isAdmin = user.app_metadata?.role === 'super_admin' || user.user_metadata?.is_admin === true;
-    if (!isAdmin) {
-      return apiError("Forbidden - admin access required", 403);
+    // a shop owner sees their own shops' financials (verifyShopAccess checks the tenant); before 2026-10-05 owners got 403
+    const ownerTenant = user.app_metadata?.role === 'shop_owner' ? (user.app_metadata?.tenant_id as string | undefined) : undefined;
+    if (!isAdmin && !ownerTenant) {
+      return apiError("Forbidden - this account has no shop", 403);
     }
-    callerTenantId = (user.app_metadata?.tenant_id as string)
-      || (user.user_metadata?.tenant_id as string)
-      || null;
+    callerTenantId = isAdmin
+      ? ((user.app_metadata?.tenant_id as string) || (user.user_metadata?.tenant_id as string) || null)
+      : ownerTenant!;
   }
 
   try {

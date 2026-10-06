@@ -194,7 +194,7 @@ export function TransactionLedger({ shopId, dateRange }: TransactionLedgerProps)
       {/* Error */}
       {error && (
         <div className="text-sm text-red-500 mb-4">
-          Failed to load transactions.
+          Failed to load transactions{error ? `: ${(error as Error).message}` : "."}
         </div>
       )}
 

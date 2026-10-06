@@ -98,7 +98,7 @@ export function KPICards({ shopId, dateRange }: KPICardsProps) {
   if (error || !data) {
     return (
       <div className="text-sm text-red-500 mb-6">
-        Failed to load financial summary.
+        Failed to load financial summary{error ? `: ${(error as Error).message}` : "."}
       </div>
     );
   }
