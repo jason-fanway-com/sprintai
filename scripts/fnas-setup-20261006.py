@@ -18,7 +18,7 @@ swap = []
 for it in items:
     for g in e2e.get(f"option_groups?menu_item_id=eq.{it['id']}&name=eq.Add-ons&select=id,max_select"):
         names = {c["name"] for c in e2e.get(f"option_choices?option_group_id=eq.{g['id']}&select=name")}
-        if names == {"Fries Instead of Chips", "Tots Instead of Chips"} and g["max_select"] != 1:
+        if names == {"French Fries Instead of Chips", "Tater Tots Instead of Chips"} and g["max_select"] != 1:
             swap.append(g["id"])
 print(f"{len(items)} items; {len(swap)} chips-swap group(s) to set max_select=1")
 if "--apply" not in sys.argv: sys.exit(0)

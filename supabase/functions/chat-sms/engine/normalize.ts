@@ -3,7 +3,7 @@
 
 const ALIASES: Record<string, string> = {
   lg: "large", lrg: "large", l: "large", med: "medium", md: "medium", m: "medium", sm: "small", s: "small",
-  xl: "xlarge", "x-large": "xlarge", "extra-large": "xlarge", w: "with",
+  xl: "xlarge", "x-large": "xlarge", "extra-large": "xlarge", w: "with", bleu: "blue", chix: "chicken", stix: "sticks", mozz: "mozzarella",
 };
 
 export function normalize(text: string): string {

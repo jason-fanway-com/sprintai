@@ -45,7 +45,7 @@ export function parseTip(text: string): Tip | null {
   const unit = m[2] ?? "";
   const isDollars = text.includes("$") || /dollar|buck/.test(unit) || m[1].includes(".");
   if (isDollars) return { kind: "cents", value: Math.round(num * 100) };
-  if (/%|percent|pct/.test(unit) || num <= 50) return { kind: "percent", value: num };
+  if (/%|percent|pct/.test(unit) || (num >= 10 && num <= 50)) return { kind: "percent", value: num }; // a bare "5" is $5 (Jason, FNA's 2026-10-06); 15 or 20 is a percent
   return { kind: "cents", value: Math.round(num * 100) };
 }
 
