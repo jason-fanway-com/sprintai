@@ -15,6 +15,7 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
+import { CURRENT_TERMS_VERSION } from "../_shared/terms.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -193,6 +194,12 @@ Deno.serve(async (req: Request) => {
       update.delivery_radius_mi = (isNaN(dr) || dr < 0) ? null : dr;
     }
     if (body.onboarding_step) update.onboarding_step = String(body.onboarding_step);
+    // terms: the client says which version the owner agreed to; the server stamps when (never client-writable)
+    if (body.accept_terms_version === CURRENT_TERMS_VERSION) {
+      update.terms_version = CURRENT_TERMS_VERSION;
+      update.terms_accepted_at = new Date().toISOString();
+      update.terms_accepted_by = String(body.accepted_by ?? "").slice(0, 200) || null;
+    }
     update.updated_at = new Date().toISOString();
 
     const { data: shop, error } = await supabase

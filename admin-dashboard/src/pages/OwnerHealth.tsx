@@ -11,6 +11,7 @@ import { useEffectiveTenant } from '../lib/useOwnerTenant'
  * The detailed pages stay in the admin view. Readiness comes from go-live's evaluate mode (the same gates that decide go-live).
  */
 const OWNER_GATES: Array<[string, string, string]> = [
+  ['terms', 'You agreed to the OrderFare terms', 'Finish sign-up and agree to the terms.'],
   ['menu', 'Menu loaded', 'Add your menu on the Menu page.'],
   ['menu_approved', 'You approved your menu', 'Review the Menu page and approve it.'],
   ['menu_clean', 'No menu items waiting for review', 'Answer the flagged items on the Menu page.'],

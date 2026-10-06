@@ -28,6 +28,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import { isShopLive } from "../_shared/connect.ts";
+import { CURRENT_TERMS_VERSION } from "../_shared/terms.ts";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -56,7 +57,7 @@ Deno.serve(async (req: Request) => {
 
   const { data: shop, error: shopErr } = await supabase
     .from("shops")
-    .select("id, name, slug, is_test, ein, open_hours, phone_number_e164, subscription_status, stripe_connected_account_id, charges_enabled, payouts_enabled, connect_status, latitude, longitude, delivery_enabled, formatted_address, email_ticket_recipient, first_delivery_test_passed_at, campaign_assignment_status, onboarding_complete")
+    .select("id, name, slug, is_test, ein, open_hours, phone_number_e164, subscription_status, stripe_connected_account_id, charges_enabled, payouts_enabled, connect_status, latitude, longitude, delivery_enabled, formatted_address, email_ticket_recipient, first_delivery_test_passed_at, campaign_assignment_status, onboarding_complete, terms_version")
     .eq("id", shopId).single();
   if (shopErr || !shop) return jsonError("Shop not found", 404);
 
@@ -287,6 +288,7 @@ Deno.serve(async (req: Request) => {
     delivery_test: deliveryTestPass,
     campaign_assignment: campaignAssigned,
     ticket_destination: ticketDestPass,
+    terms: (shop as { terms_version?: string | null }).terms_version === CURRENT_TERMS_VERSION, // the owner agreed to the current terms
   };
 
   const blocked_by = Object.entries(gates).filter(([, ok]) => !ok).map(([k]) => k);
@@ -297,7 +299,7 @@ Deno.serve(async (req: Request) => {
   //   Phase A — the owner's job (nine gates). When all pass → onboarding_complete.
   //   Phase B — our QA job (four gates). Evaluated after; owner not blocked on it.
   const PHASE_A_GATES = [
-    "ein", "connect", "subscription", "menu", "menu_approved",
+    "terms", "ein", "connect", "subscription", "menu", "menu_approved",
     "menu_clean", "hours", "ticket_destination", "delivery_geo",
   ] as const;
   const PHASE_B_GATES = ["number", "campaign_assignment", "proof", "delivery_test"] as const;

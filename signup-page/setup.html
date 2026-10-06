@@ -691,6 +691,22 @@
     </div>
   </div>
 
+  <!-- Terms (Jason 2026-10-06): the owner agrees before finishing; onboarding-save stamps when -->
+  <div class="section" id="termsSection">
+    <div class="section-h">🤝 How responsibility works</div>
+    <ul style="margin:8px 0 12px 20px;line-height:1.6;">
+      <li><strong>Your shop is the seller.</strong> You own your menu, prices, food, allergen information, refunds and your customers. Payments go to your Stripe account.</li>
+      <li><strong>We take the order, read it back, charge exactly what the customer confirmed, and get the ticket to you.</strong> If our system gets one of those wrong, we credit you for that order.</li>
+      <li><strong>Delivery is by Uber unless you deliver yourself.</strong> Uber's delivery fee and tip are paid to OrderFare at checkout, and we pay Uber. Late or lost deliveries are an Uber claim.</li>
+      <li><strong>You cancel and refund orders through OrderFare.</strong> If you cancel after an Uber driver accepts, Uber's fee comes out of your next orders. If the customer cancels, you decide on the food.</li>
+      <li><strong>We don't cover customer-satisfaction issues</strong> with food, preparation, prep times or delivery.</li>
+    </ul>
+    <label style="display:flex;gap:10px;align-items:flex-start;font-weight:600;">
+      <input type="checkbox" id="termsAccept" style="width:18px;height:18px;margin-top:2px;" />
+      <span>I agree to the <a href="/terms.html" target="_blank" rel="noopener">OrderFare Terms of Service</a> (version 2026-10-06), including how orders, delivery, cancellations and refunds work.</span>
+    </label>
+  </div>
+
   <!-- Save / Finish -->
   <div class="btn-row" style="justify-content: flex-end;">
     <a id="goToShopBtn" class="btn btn-secondary" style="display:none" href="https://getsprintai.com/admin/shop-owner" target="_blank">Go to my Shop →</a>
@@ -1395,11 +1411,20 @@
       fields.ticket_destination_detail = null;
     }
 
+    if (!document.getElementById("termsAccept").checked) {
+      showToast("Please agree to the OrderFare terms to finish.");
+      btn.disabled = false;
+      btn.textContent = "Save & finish →";
+      document.getElementById("termsSection").scrollIntoView({ behavior: "smooth" });
+      return;
+    }
     api("onboarding-save", {
       action: "save",
       shop_id: state.shop.id,
       onboarding_step: "setup",
-      fields: fields
+      fields: fields,
+      accept_terms_version: "2026-10-06",
+      accepted_by: (state.shop && (state.shop.email_ticket_recipient || state.shop.owner_name)) || ""
     })
     .then(function (r) {
       if (r.json && r.json.ok) {
