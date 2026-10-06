@@ -1,0 +1,78 @@
+category,name,size,price,description,prompt_for,upsell
+Appetizers,Sauteed Pierogies (5),,9.00,"Seared with onions, garlic & butter",,add cheese steak meat (add cheese steak meat +$4)
+Appetizers,Pretzel Stix (3),,9.50,With side of housemade Yuengling lager beer cheese,,add cheese steak meat (add cheese steak meat +$4)
+Appetizers,Margherita Flatbread,,10.50,"Marinara, fresh mozz cheese, fresh basil & parm cheese",,
+Appetizers,Cheese Steak Flatbread,,11.50,"Steak meat, onions, banana peppers, Cooper cheese & side of marinara",,
+Appetizers,Cheese Steak Egg Rolls,,9.50,"Steak meat, onions, Cooper cheese & side of sweet chili mayo",,
+Appetizers,Mini Crab Cakes (2),,13.00,With corn salsa & sweet chili mayo,,
+Appetizers,Bone In Wings (8),,12.00,"Side of bleu cheese or ranch, celery & choice of sauce","which sauce (mild, hot, honey bbq, sweet n sweaty, garlic parm, jalapeno cowboy butter, or hot honey garlic sweet chili); which dip (bleu cheese or ranch)",
+Appetizers,Bang Bang Skewers,,12.00,With sriracha mayo sauce,,
+Appetizers,Sesame Ginger Chicken Skewers,,12.00,With peanut butter dipping sauce,,
+Appetizers,Bacon Cooper Burger Quesadilla,,12.00,"Bacon, Cooper cheese, pickles & Russian dipping sauce",,
+Appetizers,Mozz Stix (6),,7.00,With side of marinara,,
+Salads,Caesar Salad,,10.00,"Crisp romaine lettuce, shaved parmesan, croutons & house-made Caesar dressing",,"add a protein (add chicken +$5, add shrimp +$6)"
+Salads,House Salad,,9.00,"Iceberg, red onion, cucumbers, cherry tomatoes, bacon & cheddar cheese",,"add a protein (add chicken +$5, add shrimp +$6)"
+Salads,Chix Bacon Ranch Salad,,15.00,"Iceberg, ranch, cherry tomatoes, bacon & cheddar cheese",,"add a protein (add chicken +$5, add shrimp +$6)"
+Salads,Harvest Salad,,12.50,"Spring mix, goat cheese, red onion, dried cranberries, roasted sweet potatoes, glazed walnuts & apple cider vinaigrette",,"add a protein (add chicken +$5, add shrimp +$6)"
+Salads,Chopped Italian Salad,,13.00,"Chopped iceberg, red onion, tomatoes, artichokes, provolone cheese, ham, salami, pepperoncini & balsamic dressing",,"add a protein (add chicken +$5, add shrimp +$6)"
+Soups,French Onion Soup,,5.50,"Topped with Swiss cheese, provolone cheese, onion straws & scallions",,
+Soups,Chicken Corn Chowder,Cup,4.75,,,
+Soups,Chicken Corn Chowder,Bowl,6.00,,,
+Soups,Unstuffed Pepper Soup,Cup,4.50,,,
+Soups,Unstuffed Pepper Soup,Bowl,5.75,,,
+Soups,Italian Wedding Soup,Cup,4.50,,,
+Soups,Italian Wedding Soup,Bowl,5.75,,,
+Soups,Classic Chili,Cup,4.75,,,
+Soups,Classic Chili,Bowl,6.00,,,
+Burgers,49ers Cheese Burger,,13.50,"8oz burger with lettuce, tomato, onion, mayo & American cheese on a kaiser roll. Served with housemade chips",,"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Burgers,Western Pretzel Burger,,14.50,"8oz burger with pulled pork, bacon, onion ring, beer cheese & BBQ sauce on a pretzel bun. Served with housemade chips",,"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Burgers,Bacon Cooper Burger,,13.50,8oz burger with bacon & Cooper cheese on a kaiser roll. Served with housemade chips,,"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Burgers,Mushroom Swiss Burger,,13.50,8oz burger with mushrooms & Swiss cheese on a kaiser roll. Served with housemade chips,,"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Burgers,Bacon n Bleu Burger,,13.50,"8oz burger with lettuce, tomato, bacon & bleu cheese dressing on a kaiser roll. Served with housemade chips",,"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Burgers,Mushroom Swiss Turkey Burger,,13.00,6oz turkey burger with mushrooms & Swiss cheese on a kaiser roll. Served with housemade chips,,"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Burgers,The Philly Special,,14.50,"8oz burger with steak meat, onions & Cooper cheese on a kaiser roll. Served with housemade chips",,"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Burgers,Bacon Cooper Sub,,13.50,"8oz burger with lettuce, tomato, bacon, Cooper cheese & mayo on a steak roll. Served with housemade chips",,"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Handhelds,Cooper Cheese Steak,,15.00,Onions & Cooper cheese on a regular or seeded roll. Served with housemade chips,which meat (steak or chicken); which roll (regular roll or seeded roll),"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Handhelds,LV Cheese Steak,,16.00,"Onions, sauce, pickles, banana peppers & Cooper cheese on a regular or seeded roll. Served with housemade chips",which meat (steak or chicken); which roll (regular roll or seeded roll),"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Handhelds,Beer Cheese Steak,,15.50,"Sweet peppers, onion straws & beer cheese on a regular or seeded roll. Served with housemade chips",which meat (steak or chicken); which roll (regular roll or seeded roll),"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Handhelds,Black Diamond Cheese Steak,,15.00,"Mushrooms, onions & Cooper cheese on a regular or seeded roll. Served with housemade chips",which roll (regular roll or seeded roll),"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Handhelds,Chix Bacon Ranch Hoagie,,14.00,"Iceberg, ranch, cherry tomatoes, bacon & cheddar cheese on a regular roll. Served with housemade chips",,"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Handhelds,Smoked Pulled Pork Sandwich,,13.00,"Slaw, pickles & BBQ sauce on a Portuguese roll. Served with housemade chips",,"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Handhelds,Crab Cake BLT,,17.00,"Iceberg, tomato, Old Bay tartar sauce & bacon on a Portuguese roll. Served with housemade chips",,"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Handhelds,Short Rib Grilled Cheese,,15.00,"Boneless short rib, Cooper cheese, provolone cheese & dipping gravy sauce. Served with housemade chips",,"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Handhelds,Vodka Chicken Pesto Sandwich,,16.00,"Breaded chicken, vodka sauce, pesto sauce & fresh mozz on a seeded roll. Served with housemade chips",,"swap chips for fries or tots (fries instead of chips +$2.50, tots instead of chips +$2.50)"
+Entrees,Fantasy Chicken Pasta,,19.00,"Roasted red peppers, artichokes, sun-dried tomatoes, asparagus in blush vodka sauce with penne pasta, garlic bread & side salad",,
+Entrees,11oz Country Fried Steak,,15.50,With mashed potatoes & veggie or side salad,which side (veggie or side salad),
+Entrees,Black Diamond Steak,,17.00,With mashed potatoes & veggie or side salad,which side (veggie or side salad),
+Entrees,Pappardelle Bolognese,,16.50,With garlic bread & side salad,,
+Entrees,Crab & Shrimp Capellini,,19.00,"Cherry tomatoes, garlic, butter, olive oil, Italian parsley with angel hair, garlic bread & side salad",,
+Entrees,Rasta Chicken Pasta,,16.50,"Sweet bell peppers, jerk seasoning, heavy cream & penne pasta with garlic bread & side salad",,
+Entrees,Vodka Chix Parm Pesto Pasta,,17.50,"Angel hair, garlic bread & side salad",,
+Entrees,Short Rib Ragu,,18.00,Choice of pappardelle or mashed potatoes & side salad,which base (pappardelle or mashed potatoes),
+Entrees,Chicken Finger Basket,,13.00,"French fries or tots, side of coleslaw & choice of sauce","which side (french fries or tots); which sauce (mild, hot, honey bbq, sweet n sweaty, garlic parm, jalapeno cowboy butter, or hot honey garlic sweet chili)",
+Entrees,Fried Shrimp Basket,,13.00,French fries or tots & side of coleslaw,which side (french fries or tots),
+Entrees,Boneless Wing Basket,,13.00,"French fries or tots, side of coleslaw & choice of sauce","which side (french fries or tots); which sauce (mild, hot, honey bbq, sweet n sweaty, garlic parm, jalapeno cowboy butter, or hot honey garlic sweet chili)",
+Wing Sauces,Mild,,0.00,,,
+Wing Sauces,Hot,,0.00,,,
+Wing Sauces,Honey BBQ,,0.00,,,
+Wing Sauces,Sweet N Sweaty,,0.00,,,
+Wing Sauces,Garlic Parm,,0.00,,,
+Wing Sauces,Jalapeno Cowboy Butter,,0.00,,,
+Wing Sauces,Hot Honey Garlic Sweet Chili,,0.00,,,
+Wing Dip Choice,Bleu Cheese,,0.00,,,
+Wing Dip Choice,Ranch,,0.00,,,
+Steak or Chicken Choice,Steak,,0.00,,,
+Steak or Chicken Choice,Chicken,,0.00,,,
+Roll Choice,Regular Roll,,0.00,,,
+Roll Choice,Seeded Roll,,0.00,,,
+Entree Side Choice,Veggie,,0.00,,,
+Entree Side Choice,Side Salad,,0.00,,,
+Ragu Base Choice,Pappardelle,,0.00,,,
+Ragu Base Choice,Mashed Potatoes,,0.00,,,
+Basket Side Choice,French Fries,,0.00,,,
+Basket Side Choice,Tots,,0.00,,,
+Side Substitutions,Fries Instead of Chips,,2.50,,,
+Side Substitutions,Tots Instead of Chips,,2.50,,,
+Salad Protein Add-ons,Add Chicken,,5.00,,,
+Salad Protein Add-ons,Add Shrimp,,6.00,,,
+Appetizer Add-ons,Add Cheese Steak Meat,,4.00,,,
