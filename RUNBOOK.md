@@ -1,6 +1,6 @@
 # SprintAI — Runbook
 
-Last updated: 2026-09-09
+Last updated: 2026-10-06
 
 This is the operational manual for the SprintAI ordering system. It is the
 canonical source of truth for how the system deploys, runs, and recovers. If
@@ -994,16 +994,17 @@ notified without a corresponding issue.
 | `admin-api` | REST API for admin dashboard (CRUD) | Yes |
 | `admin-chat` | Conversational AI admin (menu mgmt, delivery) | Yes |
 | `onboarding-save` | Wizard step persistence (create shop, save step) | No |
-| `go-live` | All-or-nothing go-live gate check (13 gates) | No |
+| `go-live` | All-or-nothing go-live gate check (14 gates) | No |
 | `merchant-auth` | Server-side PIN auth for sold-out manager | No |
 | `set-app-metadata` | Set user roles in app_metadata (service-key only) | No |
 | `shop-financials` | Shop financial reporting (KPIs, ledger, payouts, CSV export) | Yes |
 | `customer-crm` | Read-only owner-facing customer list (name, phone, order count/spend, opt-out status) — tenant derived server-side from JWT, `customers` table stays service-role-only | Yes |
 
-#### Go-live gates (13 — all must pass)
+#### Go-live gates (14 — all must pass)
 
 | Gate | Check |
 |------|-------|
+| terms | `shops.terms_version` matches `CURRENT_TERMS_VERSION` (`_shared/terms.ts`); stamped server-side by `onboarding-save` when the owner checks the sign-up agreement box (migration 153) |
 | connect | `isShopLive()` true (charges+payouts enabled) |
 | delivery_geo | Coordinates set when delivery_enabled |
 | menu | ≥1 active item on confirmed csv/pdf menu |

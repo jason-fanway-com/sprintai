@@ -1,6 +1,6 @@
 # SprintAI — Business
 
-Last updated: 2026-09-27
+Last updated: 2026-10-06
 
 What SprintAI is, who it serves, how it makes money, and why the product is
 built the way it is. For engineers who need business context to make good
@@ -726,6 +726,37 @@ roughly $7/day. This does not yet notify anyone when a run fails — that alerti
 separate, already-built piece running outside this codebase — but the automatic checking itself
 removes a recurring point of human failure: relying on someone's memory to catch a regression
 on a restaurant that is already taking real customers' money.
+
+### Added 2026-10-06 — the terms of service became a real contract, and agreeing to it is now required to go live
+
+Until now, `terms.html` was generic template legal boilerplate — it never said who is
+responsible when something goes wrong. It has been rewritten into an actual contract that
+spells out, in plain terms: the restaurant is the seller of every order and owns its menu,
+food, prep, allergen info, and tax; OrderFare is only on the hook for its own mistakes
+(overcharging, sending a ticket that doesn't match what the customer confirmed, or failing
+to deliver a paid ticket) and in those cases credits the restaurant for that order. It also
+sets out, for the first time, who eats a late or lost Uber delivery (Uber, via a claim
+OrderFare files — not the restaurant), how cancellations and refunds split between
+OrderFare and the restaurant, and caps OrderFare's total liability at a year of fees or
+$100, whichever is bigger.
+
+This matters commercially two ways. First, it limits Sprint's own financial exposure — a
+cart-level bug or a bad Uber delivery no longer becomes an open-ended liability question,
+because the contract draws the line in advance. Second, it is the kind of plain-spoken
+promise that earns a family-owned restaurant's trust: the owner can read in five minutes
+exactly what Sprint guarantees and exactly what stays theirs to handle, instead of
+discovering it the hard way after an order goes wrong.
+
+Sign-up now enforces it: the owner must check "I agree to the OrderFare Terms of Service"
+before finishing setup, and the server — not the browser — records who agreed and when.
+Going live now has a 14th gate: a shop cannot activate until it has agreed to the current
+version of the terms.
+
+**Known gap carried into this document:** the new terms state the per-order fee is
+"currently $1.49." Production still charges $0.99 per order (`SERVICE_FEE_CENTS` in
+`supabase/functions/_shared/connect.ts`). This was already a known mismatch on three
+marketing pages (see HANDOFF.md); it is now also wrong inside the legal terms customers and
+restaurants are asked to agree to, which is a step worse than a marketing typo.
 
 ---
 

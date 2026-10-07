@@ -1,6 +1,6 @@
 # SprintAI — Handoff
 
-Last updated: 2026-09-29
+Last updated: 2026-10-06
 
 What an incoming engineer needs to understand this system and start contributing
 within a day. Not a reference — a map.
@@ -1671,15 +1671,47 @@ a DoorDash Drive application was under review, then republished it on 2026-10-03
 build allowlist in `scripts/build-public-site.sh`, and the `/why-orderfare*` redirect in
 `netlify.toml` removed. It is live again at `/why-orderfare.html`.
 
-## Open: the live site advertises $1.49/order, Stripe still charges $0.99 (found 2026-09-29, widened 2026-10-03)
+## Terms of Service rewritten, sign-up agreement required, go-live gate added (2026-10-06)
 
-On `main` today, three live customer-facing pages say the per-order fee is **$1.49**:
-`how-it-works.html`, `checkout/index.html` (changed 2026-09-26, commit `a2b82e6b`), and
+`terms.html` went from generic template boilerplate to an actual contract (version
+`2026-10-06`): the shop is the seller/merchant of record for every order and owns its
+menu, food, prep, allergen info, and tax; OrderFare is liable only for its own mistakes
+(overcharging, a ticket that doesn't match the confirmed order, or failing to deliver a
+paid ticket) and credits the shop for that order when it happens; Uber eats late/lost
+deliveries via a claim OrderFare files, not the shop; cancellation/refund splits and a
+liability cap (greater of 12 months' fees or $100) are spelled out for the first time.
+
+The backend landed on branch `delivery/uber-direct` (commit `b8447be3`, Jason approved
+2026-10-06) and was deployed ahead of the merge:
+
+- Migration 153 adds `shops.terms_version` / `terms_accepted_at` / `terms_accepted_by`.
+- `onboarding-save` now accepts `accept_terms_version` + `accepted_by` from the client, but
+  stamps `terms_accepted_at` itself (server time, not client-supplied — can't be backdated).
+- `go-live` gained a 14th gate, `terms`: `shops.terms_version` must equal
+  `CURRENT_TERMS_VERSION` in `supabase/functions/_shared/terms.ts`. A shop cannot activate
+  without it.
+- `signup-page/setup.html` added a mandatory "How responsibility works" checkbox; "Save &
+  finish" is blocked and the owner is scrolled back to it until checked.
+
+Only the two site pages (`terms.html`, `setup.html`) were cherry-picked onto `main`
+(commit `f97da4d6`) — the rest of `delivery/uber-direct` (the Uber Direct delivery
+integration itself) is still unmerged.
+
+**This widens the open $1.49-vs-$0.99 mismatch below: `terms.html` now states the
+per-order fee is "currently $1.49," which is still untrue on `main`.** A pricing error in
+marketing copy is a typo; the same error inside the contract customers and restaurants are
+asked to agree to is a bigger problem and should be fixed first.
+
+## Open: the live site advertises $1.49/order, Stripe still charges $0.99 (found 2026-09-29, widened 2026-10-03, widened again 2026-10-06)
+
+On `main` today, four live pages say the per-order fee is **$1.49**:
+`how-it-works.html`, `checkout/index.html` (changed 2026-09-26, commit `a2b82e6b`),
 `why-orderfare.html` (republished 2026-10-03, still carries the $1.49 text throughout — hero,
-receipt mock, and fee-bar chart). The code that actually creates the Stripe charge,
+receipt mock, and fee-bar chart), and now `terms.html` (rewritten 2026-10-06, commit
+`f97da4d6` — see above). The code that actually creates the Stripe charge,
 `SERVICE_FEE_CENTS` in `supabase/functions/_shared/connect.ts`, is still **99** — unchanged on
-`main`. A customer reading any of the three pages is told $1.49; the order they place is charged
-$0.99.
+`main`. A customer reading any of these pages is told $1.49, including in the contract they
+sign at sign-up; the order they place is charged $0.99.
 
 The $1.49 constant does exist in the repo — on branch `engine/clean-sheet`
 (commit `61e3665e`, also 2026-09-26, "fee: $1.49 flat per order (Jason, 2026-09-26)") — but that
