@@ -14,8 +14,9 @@ print = functools.partial(print, flush=True)
 sys.path.insert(0, os.path.dirname(__file__))
 from e2e import get, say, cart_for  # noqa: E402  (loads secrets)
 
-SHOPS = {"vitos": "e0000000-0000-0000-0000-000000000001", "njb": "b0000000-0000-0000-0000-000000000001", "zio": "2cba7b51-211c-4437-8910-1af4dcc03498"}
+SHOPS = {"vitos": "e0000000-0000-0000-0000-000000000001", "njb": "b0000000-0000-0000-0000-000000000001", "zio": "2cba7b51-211c-4437-8910-1af4dcc03498", "fnas": "3477b955-fef4-495f-a656-f75632cf4042"}
 ADDRESSES = ["5620 Cetronia Rd Allentown pa 18106", "3300 Hamilton Blvd, Allentown, PA 18103", "2222 w union st allentown", "1901 hamilton st allentown pa"]
+ADDRESSES_BY_SHOP = {"fnas": ["3500 Route 309 Center Valley PA", "1 Saucon Valley Rd Center Valley", "5620 Cetronia Rd Allentown pa 18106", "2400 Center St Bethlehem pa", "3300 Hamilton Blvd, Allentown, PA 18103"]}
 OR_KEY = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("SPRINTAI_CHAT_OPENROUTER_API_KEY")
 TESTER_MODEL = "anthropic/claude-haiku-4.5"
 
@@ -54,6 +55,9 @@ QUIRKS = [
     ("post_link_change", "after the pay link arrives, add one more item or remove one instead of a remark, then answer whatever comes back"),
     ("start_question", "open with a question about the menu (hours, a topping, a size) before you order anything"),
     ("all_at_once", "put everything in your very first message: every item with counts, pickup or delivery with address, and your name"),
+    ("vague_open", "open with something vague and short that names only a kind of food, like 'I want pizza', 'pizza', 'can i get a burger', 'wings' or 'something to eat', and narrow down only as the shop asks"),
+    ("browse", "before ordering, ask what they have in one category ('what burgers do you have', 'what kind of salads') and then pick from what you are told"),
+    ("options_first", "say the options for an item in the same breath as the item, in an order a person would ('chicken cheesesteak seeded roll w fries'), without the word 'with'"),
 ]
 
 def llm(messages, max_tokens=60):
@@ -76,7 +80,7 @@ def make_plan(rng, names, shop_key):
     delivery = rng.random() < 0.45 and shop_key != "njb"
     return {
         "items": [n for n, _ in items],
-        "fulfillment": "delivery to " + rng.choice(ADDRESSES) if delivery else "pickup",
+        "fulfillment": "delivery to " + rng.choice(ADDRESSES_BY_SHOP.get(shop_key, ADDRESSES)) if delivery else "pickup",
         "tip": rng.choice(["15%", "$5", "20", "0", "no tip"]) if delivery else None,
         "quirks": [q for q, _ in quirks], "quirk_text": [t for _, t in quirks],
     }
@@ -128,7 +132,7 @@ def run_one(shop_key, shop_id, plan, verbose):
 
 def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--shop", default="all"); ap.add_argument("--n", type=int, default=20)
-    ap.add_argument("--seed", type=int, default=int(time.time()) % 10000); ap.add_argument("--out", default=os.path.expanduser("~/po-scratch/jason")); ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--seed", type=int, default=int(time.time()) % 10000); ap.add_argument("--out", default=os.path.expanduser("~/po-scratch/jason")); ap.add_argument("--verbose", action="store_true"); ap.add_argument("--quirk", default=None, help="force this quirk into every plan")
     a = ap.parse_args()
     if not OR_KEY: sys.exit("no OpenRouter key in env")
     rng = random.Random(a.seed)
@@ -140,6 +144,8 @@ def main():
     for i in range(a.n):
         k = keys[i % len(keys)]
         plan = make_plan(rng, names[k], k)
+        if a.quirk and a.quirk not in plan["quirks"]:
+            q = next(x for x in QUIRKS if x[0] == a.quirk); plan["quirks"].append(q[0]); plan["quirk_text"].append(q[1])
         print(f"[{i + 1}/{a.n}] {k} items={plan['items']} {plan['fulfillment']} quirks={plan['quirks']}")
         try: results.append(run_one(k, SHOPS[k], plan, a.verbose))
         except Exception as e: print("   !! error:", e); results.append({"shop": k, "plan": plan, "error": str(e), "transcript": [], "flags": {}, "cart": [], "tester_tokens": (0, 0)})
