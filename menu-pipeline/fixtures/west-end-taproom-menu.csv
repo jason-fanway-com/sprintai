@@ -1,0 +1,38 @@
+category,name,size,price,description,prompt_for,upsell
+Salads,Caesar Salad,,13.00,"Crisp romaine, house Caesar dressing, croutons and Parmesan",,add a protein (add chicken +$4)
+Salads,Mixed Green Salad,,12.00,"Romaine, baby spinach, arugula, butter lettuce, cucumbers and cherry tomatoes, lightly dressed in balsamic vinaigrette",,add a protein (add chicken +$4)
+Salads,Southwest Salad,,14.00,"Chipotle lime ranch, mixed greens, cherry tomatoes, roasted corn, black beans, bell peppers and tortilla strips",,
+Pizza,Classic Cheese Pizza,,15.00,"12-inch sourdough crust. Crushed tomato sauce, shredded mozzarella and grated Parmesan",,
+Pizza,Margherita Pizza,,17.00,"12-inch sourdough crust. Crushed tomato sauce, fresh mozzarella, basil, extra virgin olive oil and Parmesan",,
+Pizza,Pickle Pie,,16.00,"12-inch sourdough crust. Roasted garlic, shredded mozzarella and dill pickle. Hot honey optional",,hot honey optional (add hot honey +$0)
+Pizza,LeJawn James Pizza,,18.00,"12-inch sourdough crust. Crushed tomato sauce, shredded blend of Cooper and mozzarella, steak meat and onions",,
+Pizza,Pepperoni Pizza,,17.00,"12-inch sourdough crust. Crushed tomato sauce, shredded mozzarella and pepperoni",,
+Pizza,Sweet Heat Pizza,,17.00,"12-inch sourdough crust. Crushed tomato sauce, shredded mozzarella, pepperoni, jalapenos and hot honey drizzle",,
+Kids Menu,Kids Chicken Tenders,,11.00,Served with hand-cut fries,,
+Kids Menu,Kids Hamburger,,11.00,Served with hand-cut fries,,
+Kids Menu,Kids Cheeseburger,,11.00,Served with hand-cut fries,,
+Kids Menu,Kids Grilled Cheese,,10.00,Texas toast and American cheese served with hand-cut fries,,
+Kids Menu,Kids Mac & Cheese,,9.00,Elbow noodles with homemade cheese sauce,,
+Shareables,Bavarian Pretzel,,13.00,Cheese sauce and Funk Brewing beer sauce for dipping,,
+Shareables,Burrata,,15.00,"Fresh tomatoes, olive oil, herbs, balsamic and homemade crostini",,
+Shareables,Cheesy Garlic Bread,,11.00,"Pizza dough, garlic oil, herbs, mozzarella and dipping sauce",,
+Shareables,Crab Rangoon Spring Rolls,,15.00,Homemade crab mix with sweet chili dipping sauce,,
+Shareables,Hand-Cut Fries,,8.00,Fresh-cut potatoes with garlic aioli,,add truffle oil (add truffle oil +$3)
+Shareables,Loaded Fries,,13.00,"Pulled pork, shredded cheese, sour cream and scallions",,
+Shareables,Loaded Pierogies,,13.00,"Pulled pork and shredded cheese, topped with sour cream and scallions",,
+Shareables,Wings (6),,10.00,Six wings with your choice of sauce,"which sauce (buffalo, pickle dry rub, sweet chili, hot honey, or garlic parm)",
+Handhelds,Allen St. Clucker,,15.00,"Crispy chicken breast, hot honey, roasted garlic aioli, pickles and lettuce. Served with chips",,swap chips for fries (hand-cut fries instead of chips +$2)
+Handhelds,Cubano,,15.00,"Smoked ham, pulled pork, Swiss, Funk Brewing beer mustard and pickles on toasted panini bread. Served with chips",,swap chips for fries (hand-cut fries instead of chips +$2)
+Handhelds,Veggie Burger,,15.00,"Veggie patty, American cheese, lettuce, tomatoes, raw onion, pickle and taproom sauce. Served with chips",,swap chips for fries (hand-cut fries instead of chips +$2)
+Handhelds,BLT,,12.00,"Bacon, lettuce, tomatoes and mayo on Texas toast. Served with chips",,swap chips for fries (hand-cut fries instead of chips +$2)
+Handhelds,Taproom Burger,,14.00,"6 oz Gauker Farms beef patty, American cheese, lettuce, tomatoes, raw onion, pickle and taproom sauce. Served with chips",,"add bacon or swap the chips (add bacon +$2, hand-cut fries instead of chips +$2)"
+Wing Sauces,Buffalo,,0.00,,,
+Wing Sauces,Pickle Dry Rub,,0.00,,,
+Wing Sauces,Sweet Chili,,0.00,,,
+Wing Sauces,Hot Honey,,0.00,,,
+Wing Sauces,Garlic Parm,,0.00,,,
+Salad Protein Add-ons,Add Chicken,,4.00,,,
+Side Substitutions,Hand-Cut Fries Instead of Chips,,2.00,,,
+Burger Add-ons,Add Bacon,,2.00,,,
+Fries Add-ons,Add Truffle Oil,,3.00,,,
+Pizza Add-ons,Add Hot Honey,,0.00,,,
