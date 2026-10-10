@@ -11,7 +11,7 @@ export interface Address {
   validated: boolean;
   zone_ok: boolean;
   /** read_as: the geocoder read the street differently from what was typed ("w union st" -> "Union St"): say so, take a correction. delivery_quote_*: a courier shop's quote for this address (runner); a new address carries its own */
-  read_as?: boolean; delivery_quote_cents?: number; delivery_quote_id?: string; /** the courier that priced it ("uber"); the pay-link line names it */ delivery_courier?: string;
+  read_as?: boolean; delivery_quote_cents?: number; delivery_quote_id?: string; /** the courier that priced it ("uber"); the pay-link line names it */ delivery_courier?: string; /** the courier could not quote right now (busy, rate-limited): not "outside our area" */ courier_down?: boolean;
 }
 
 export type Tip = { kind: "percent"; value: number } | { kind: "cents"; value: number };
@@ -148,7 +148,7 @@ export type DeclineCode =
   | "nothing_to_remove"
   | "not_delivery_shop"
   | "address_not_found"
-  | "address_out_of_zone"
+  | "address_out_of_zone" | "delivery_unavailable"
   | "tip_out_of_range";
 
 function newLine(form: OrderForm, span: string, qty: number, held: string[], extra: Partial<Line> = {}): Line { // a fresh, unresolved line with the next id; `extra` overrides fields (answers, notes, status)
@@ -220,7 +220,7 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: LineMatc
           let value = m.value; const had = form.address?.formatted, said = zipOf(value.text), hadZip = zipOf(had);
           if (said && hadZip && said !== hadZip && value.validated && value.formatted === had) { value = { ...value, formatted: had!.replace(hadZip, said) }; ledger.push({ turn: t, event: "address_zip_corrected_by_customer", data: { from: hadZip, to: said } }); } // "its 18103 not 18104": their ZIP, our street
           const ok = value.validated && value.zone_ok;
-          if (!value.validated) declines.push({ code: "address_not_found", span: value.text }); else if (!value.zone_ok) declines.push({ code: "address_out_of_zone", span: value.text });
+          if (!value.validated) declines.push({ code: "address_not_found", span: value.text }); else if (!value.zone_ok) declines.push({ code: value.courier_down ? "delivery_unavailable" : "address_out_of_zone", span: value.text });
           if (ok && value.delivery_quote_cents !== form.address?.delivery_quote_cents) reopenIfConfirmed(); form.address = { ...value }; if (ok && form.fulfillment === null) form.fulfillment = "delivery"; // a courier fee moving with the address changes the total
           ledger.push({ turn: t, event: "answer", data: { field: "address", value: value, accepted: ok } });
         } else if (m.field === "tip") {

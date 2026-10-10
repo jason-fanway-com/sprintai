@@ -36,6 +36,7 @@ export const T = {
   noSuchLine: (span?: string) => (span ? `I don't see "${span}" in your order.` : `I don't see that in your order.`),
   nothingToRemove: () => `Your order is empty, nothing to remove.`,
   addressNotFound: (text: string) => `I couldn't find "${text}". Can you check it, or give a nearby cross street?`,
+  deliveryUnavailable: () => `Delivery isn't available right now. You can switch to pickup, or try again in a few minutes.`,
   addressOutOfZone: (text: string) => `${text} is outside our delivery area. You can switch to pickup or send a different address.`,
   droppedLine: (span: string) => `I'll leave "${span}" off for now.`,
   addressReadAs: (text: string) => `I read that as ${text}. If that's not right, send the address again.`,

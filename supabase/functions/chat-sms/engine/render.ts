@@ -145,7 +145,7 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
   }
 
   const declineText: Partial<Record<Decline["code"], (span?: string) => string>> = {
-    no_such_line: (sp) => T.noSuchLine(sp), nothing_to_remove: () => T.nothingToRemove(), address_not_found: (sp) => T.addressNotFound(sp ?? ""), address_out_of_zone: (sp) => T.addressOutOfZone(sp ?? "That address"),
+    no_such_line: (sp) => T.noSuchLine(sp), nothing_to_remove: () => T.nothingToRemove(), address_not_found: (sp) => T.addressNotFound(sp ?? ""), delivery_unavailable: () => T.deliveryUnavailable(), address_out_of_zone: (sp) => T.addressOutOfZone(sp ?? "That address"),
     dropped_line: (sp) => T.droppedLine(sp ?? ""), address_to_pickup: () => T.addressToPickup(), tip_zero: () => T.tipZero(), tip_out_of_range: () => T.tipOutOfRange(), checkout_failed: () => T.checkoutFailed(), address_read_as: (sp) => T.addressReadAs(sp ?? ""), sold_out: (sp) => T.soldOut(sp ?? ""),
   };
   for (const d of plan.declines) { const f = declineText[d.code]; if (f) parts.push(f(d.span)); }

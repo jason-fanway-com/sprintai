@@ -215,7 +215,7 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
       let value = await deps.geocoder(m.value.text);
       if (courier && value.validated && value.zone_ok) {
         const q = await quoteFor(value.formatted ?? value.text);
-        value = q.ok ? { ...value, delivery_quote_cents: q.fee_cents, delivery_quote_id: q.quote_id, delivery_courier: input.shop.delivery_provider ?? undefined } : { ...value, zone_ok: false };
+        value = q.ok ? { ...value, delivery_quote_cents: q.fee_cents, delivery_quote_id: q.quote_id, delivery_courier: input.shop.delivery_provider ?? undefined } : { ...value, zone_ok: false, ...(q.code === "unavailable" || q.code === "provider" ? { courier_down: true } : {}) }; // a courier outage is not "outside our area" (Uber 429 under load, 10-10)
         if (!q.ok) { console.warn(`[engine] courier quote refused cart=${input.cart.id.slice(0, 8)} code=${q.code} ${q.error}`); quoteRefusals.push({ code: q.code, error: q.error.slice(0, 300) }); }
       }
       moves[i] = { kind: "answer", field: "address", value };
