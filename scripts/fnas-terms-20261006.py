@@ -53,11 +53,16 @@ menu = e2e.get(f"menus?shop_id=eq.{SHOP}&source=eq.csv&select=id")[0]["id"]
 items = {i["name"]: i["id"] for i in e2e.get(f"menu_items?menu_id=eq.{menu}&active=eq.true&select=id,name")}
 missing = [n for n in TERMS if n not in items]
 assert not missing, f"not on the menu: {missing}"
-rows = []
+rows, revive = [], []
 for name, terms in TERMS.items():
     for term in terms:
         q = urllib.parse.quote(term)
-        if not e2e.get(f"lexicon?menu_id=eq.{menu}&term=eq.{q}&target_id=eq.{items[name]}&active=eq.true&select=id"):
+        if e2e.get(f"lexicon?menu_id=eq.{menu}&term=eq.{q}&target_id=eq.{items[name]}&active=eq.true&select=id"):
+            continue
+        off = e2e.get(f"lexicon?menu_id=eq.{menu}&term=eq.{q}&target_id=eq.{items[name]}&active=eq.false&select=id")
+        if off:  # switched off earlier (stale once): switch it back on rather than insert a duplicate (409)
+            revive.append(off[0]["id"]); continue
+        if True:
             rows.append({"shop_id": SHOP, "menu_id": menu, "term": term, "target_type": "item", "target_id": items[name],
                          "provenance": "owner_confirmed", "weight": 1, "active": True})
 # terms this script wrote earlier and no longer lists (or whose item left the menu) are switched off
@@ -69,6 +74,10 @@ if "--apply" in sys.argv and rows:
     r = urllib.request.Request(f"{e2e.U}/rest/v1/lexicon", method="POST", data=json.dumps(rows).encode(),
         headers={"apikey": e2e.K, "Authorization": f"Bearer {e2e.K}", "Content-Type": "application/json", "Prefer": "return=minimal"})
     urllib.request.urlopen(r, timeout=60); print("inserted", len(rows))
+if "--apply" in sys.argv and revive:
+    r = urllib.request.Request("%s/rest/v1/lexicon?id=in.(%s)" % (e2e.U, ",".join(revive)), method="PATCH", data=json.dumps({"active": True, "provenance": "owner_confirmed"}).encode(),
+        headers={"apikey": e2e.K, "Authorization": f"Bearer {e2e.K}", "Content-Type": "application/json", "Prefer": "return=minimal"})
+    urllib.request.urlopen(r, timeout=60); print("revived", len(revive))
 if "--apply" in sys.argv:
     for i in range(0, len(stale), 50):
         ids = ",".join(stale[i:i + 50])
