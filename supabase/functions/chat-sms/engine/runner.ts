@@ -34,7 +34,10 @@ export interface RunnerShop {
   delivery_provider?: string | null;
   /** item ids marked sold out (86) for today */
   sold_out?: string[];
+  /** today's hours and the week's, for "what time do you close" (computed by the caller from shops.open_hours) */
+  hours?: { today: string | null; week: string } | null;
 }
+
 export interface RunnerCart {
   id: string;
   engine_form: OrderForm | null;
@@ -260,7 +263,7 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
     form.confirmed = false; form.status = "confirming"; form.open = { kind: "confirm" };
     out.plan.declines.push({ code: "checkout_failed" });
     out.plan.question = null;
-    reply = render(out.plan, form, menu, { shop_name: menu.shop.name, phone_display: menu.shop.phone_display });
+    reply = render(out.plan, form, menu, { shop_name: menu.shop.name, phone_display: menu.shop.phone_display, hours: input.shop.hours ?? null });
   } else if (out.handoff && !form.checkout_session_id) {
     const res = await deps.createCheckout({
       cartId: input.cart.id, shopName: input.shop.name, testMode: input.cart.test_mode, cartLines: toCartJson(form, menu),
@@ -270,13 +273,13 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
     if (res.ok) {
       form.checkout_session_id = res.sessionId; form.checkout_url = res.url;
       out.plan.question = { kind: "handoff", totals: t, url: res.url, relink: out.plan.question?.kind === "handoff" && out.plan.question.relink };
-      reply = render(out.plan, form, menu, { shop_name: menu.shop.name, phone_display: menu.shop.phone_display });
+      reply = render(out.plan, form, menu, { shop_name: menu.shop.name, phone_display: menu.shop.phone_display, hours: input.shop.hours ?? null });
     } else {
       await logError(deps.supabase, { conversationId: input.conversationId, shopId: input.shop.id, tenantId: input.shop.tenant_id, phase: "chat-sms", stage: "render", customerMessage: input.message, error: new Error(`checkout failed: ${res.error}`) });
       form.confirmed = false; form.status = "confirming"; form.open = { kind: "confirm" };
       out.plan.declines.push({ code: "checkout_failed" });
       out.plan.question = null;
-      reply = render(out.plan, form, menu, { shop_name: menu.shop.name, phone_display: menu.shop.phone_display });
+      reply = render(out.plan, form, menu, { shop_name: menu.shop.name, phone_display: menu.shop.phone_display, hours: input.shop.hours ?? null });
     }
   }
 

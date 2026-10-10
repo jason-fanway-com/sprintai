@@ -14,7 +14,7 @@ export type Decline = { code: DeclineCode | "dropped_line" | "address_to_pickup"
 
 export type Info =
   | { kind: "cart"; totals: Totals } | { kind: "item"; item: MenuItem; unit_cents: number; sizes?: Array<{ name: string; cents: number }>; price: boolean; answer?: boolean; in_cart?: boolean }
-  | { kind: "eta" } | { kind: "welcome" } | { kind: "got_it" }
+  | { kind: "eta" } | { kind: "hours" } | { kind: "welcome" } | { kind: "got_it" }
   | { kind: "cart_has"; qty: number; name: string } | { kind: "cart_lacks"; name: string }
   | { kind: "list"; names: string[]; descs?: Array<string | null> } | { kind: "categories"; names: string[] } | { kind: "not_found"; about: string }
   | { kind: "human" } | { kind: "cancelled" } | { kind: "started_over" } | { kind: "unclear" };
@@ -161,7 +161,7 @@ export function render(plan: ReplyPlan, form: OrderForm, menu: Menu, voice: Voic
       const money = !i.price ? null : sizes ? sizes.map((n) => `${title(n)} ${dollars(i.sizes!.find((x) => x.name === n)!.cents)}`).join(", ") : dollars(i.unit_cents);
       if (sizes && !i.price && !i.in_cart) opts.unshift(`Sizes: ${sizes.map(title).join(", ")}`);
       parts.push((i.answer ? T.yesWeHave() + " " : "") + T.itemInfo(sizes ? title(i.item.facets.kind ?? i.item.display_name) : i.item.display_name, money, opts, i.item.description));
-    } else if (i.kind === "eta") parts.push(T.eta(form.fulfillment));
+    } else if (i.kind === "eta") parts.push(T.eta(form.fulfillment)); else if (i.kind === "hours") parts.push(T.hours(voice.hours ?? null));
     else if (i.kind === "welcome") parts.push(T.youreWelcome());
     else if (i.kind === "got_it") parts.push(T.gotIt());
     else if (i.kind === "cart_has") parts.push(T.cartHas(i.qty, i.name));

@@ -43,6 +43,11 @@ TERMS = {
                                     "chicken parmesan", "chix parm", "vodka chix parm"],
     "Sesame Ginger Chicken Skewers": ["sesame chicken skewers", "ginger chicken skewers"],
     "French Onion Soup": ["onion soup"],
+    # "i want pasta" listed only the three with pasta in the name (pass 10-10)
+    "Pappardelle Bolognese": ["pasta", "pasta bolognese", "bolognese pasta"],
+    "Crab & Shrimp Capellini": ["pasta", "seafood pasta", "shrimp pasta"],
+    "Short Rib Ragu": ["pasta", "short rib pasta", "ragu pasta"],
+    "Fantasy Chicken Pasta": ["pasta"], "Rasta Chicken Pasta": ["pasta"], "Vodka Chix Parm Pesto Pasta": ["pasta"],
 }
 menu = e2e.get(f"menus?shop_id=eq.{SHOP}&source=eq.csv&select=id")[0]["id"]
 items = {i["name"]: i["id"] for i in e2e.get(f"menu_items?menu_id=eq.{menu}&active=eq.true&select=id,name")}

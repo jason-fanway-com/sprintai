@@ -48,7 +48,7 @@ export function sameWord(a: string, b: string): boolean { const [s, l] = a.lengt
 
 
 export const SIZE_WORDS = new Set(["small", "medium", "large", "xlarge", "personal", "sheet", "cup", "bowl", "pint", "quart", "half", "whole", "regular"]);
-export const STOPWORDS = new Set(["a", "an", "the", "of", "with", "and", "please", "some", "order", "side", "one", "two", "three", "for", "me", "get", "want", "like", "id", "i", "can", "have", "to", "my", "on", "it", "that", "just", "thanks", "thank", "you", "pls", "plz", "size", "sized", "inch", "inches", "thing", "things", "stuff", "kinda", "piece", "pieces", "pc", "pcs"]);
+export const STOPWORDS = new Set(["a", "an", "the", "of", "as", "with", "and", "please", "some", "order", "side", "one", "two", "three", "for", "me", "get", "want", "like", "id", "i", "can", "have", "to", "my", "on", "it", "that", "just", "thanks", "thank", "you", "pls", "plz", "size", "sized", "inch", "inches", "thing", "things", "stuff", "kinda", "piece", "pieces", "pc", "pcs"]);
 /** The words of a span that could name an item: no stopwords, no size words. */
 export function contentWords(text: string): string[] { return words(text).filter((w) => !STOPWORDS.has(w) && !SIZE_WORDS.has(w)); }
 

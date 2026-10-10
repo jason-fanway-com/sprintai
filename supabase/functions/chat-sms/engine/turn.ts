@@ -1,4 +1,4 @@
-import { asksPrice, asksHave, asksWait, saysThanks, EACH, isQuestion, LINK } from "./vocab.ts";
+import { asksPrice, asksHave, asksWait, asksHours, saysThanks, EACH, isQuestion, LINK } from "./vocab.ts";
 // turn.ts — one conversational turn as a pure function: (form, menu, message, moves) -> (form', ledger, plan, reply)
 import { apply, normalizeMoveBatch, type LedgerEntry, type Line, type LineMatcher, type Move, type OpenQuestion, type OrderForm, type LineRef } from "./form.ts";
 import type { Menu } from "./menu.ts";
@@ -9,7 +9,7 @@ import { priceLine, totals, unitCents } from "./price.ts";
 import { render, type Ack, type Decline, type Info, type Question, type ReplyPlan } from "./render.ts";
 import type { Voice } from "./templates.ts";
 import { itemsInCategory } from "./menu.ts";
-import { contentWords, leadingCount, splitList, words, findWordRun, isWordSubset, sameWord, STOPWORDS, SIZE_WORDS, withoutCountry, normalize, closestWord } from "./normalize.ts";
+import { contentWords, leadingCount, splitList, words, findWordRun, isWordSubset, sameWord, sameWords, STOPWORDS, SIZE_WORDS, withoutCountry, normalize, closestWord } from "./normalize.ts";
 
 export interface TurnInput {
   form: OrderForm;
@@ -101,11 +101,11 @@ export function turn(input: TurnInput): TurnOutput {
   }
   // "one of each except sweet potato" -> seven adds of "fries", one kind each: "fries" is not in the message, but every kind is a candidate of the line we asked about: a split, not inventions
   if (focus && focus.status.kind === "ambiguous") {
-    const cands = focus.status.candidates, one = (text: string) => narrow(cands, text, menu).length === 1 || (narrow(cands, text, menu).length === 0 && resolveSpan(text, menu).kind === "item"); // "turkey club" when the list showed nine other sandwiches: named outright, it is a kind too
+    const cands = focus.status.candidates, shared = cands.length ? words(menu.items.get(cands[0])?.display_name ?? "").filter((w) => cands.every((id) => words(menu.items.get(id)?.display_name ?? "").includes(w))) : [], exactKind = (text: string) => cands.filter((id) => sameWords(words(menu.items.get(id)?.display_name ?? "").filter((w) => !shared.includes(w)), contentWords(text))), one = (text: string) => exactKind(text).length === 1 || narrow(cands, text, menu).length === 1 || (narrow(cands, text, menu).length === 0 && resolveSpan(text, menu).kind === "item"); // "turkey club" when the list showed nine other sandwiches: named outright, it is a kind too
     const tokens = (text: string) => (({ count, rest }) => one(rest || text) ? [{ span: rest || text, qty: count ?? 1 }] : null)(leadingCount(text)) ?? countedPieces(text);
     // each add or answer naming exactly one kind of the asked-about line is a part ("fries"+["crazy"], "crazy fries", the answer "Bacon Cheese", "one plain one pepperoni")
     const partsOf = (m: Move) => m.kind === "add_line" ? (one([m.item_span, ...m.option_spans].join(" ")) && (lineMatchesSpan(focus, m.item_span, menu) || cands.some((id) => lineMatchesSpan({ ...focus, item_id: id }, m.item_span, menu))) ? [{ span: [m.item_span, ...m.option_spans].join(" "), qty: Math.max(1, m.qty) }] : [])
-      : m.kind === "answer_option" && (m.line_id === undefined || m.line_id === focus.line_id) ? tokens(m.value_span).filter((p) => one(p.span)) : [];
+      : m.kind === "answer_option" && (m.line_id === undefined || m.line_id === focus.line_id) ? tokens(m.value_span).filter((p) => one(p.span)) : m.kind === "change_line" && "span" in m.ref && lineMatchesSpan(focus, m.ref.span, menu) ? (m.add_option_spans ?? []).filter(one).map((sp) => ({ span: sp, qty: 1 })) : []; // the label we listed ("Lv Cheese" beside "Lv Chicken Cheese") names one kind
     let parts = batch.flatMap(partsOf);
     // "one of each (except sweet potato)": every kind, minus the ones the message names
     const each = EACH.some((e) => findWordRun(mw, words(e)) >= 0);
@@ -254,7 +254,7 @@ export function turn(input: TurnInput): TurnOutput {
   // 4. bind every line as far as the data allows
   const before = new Map(input.form.lines.map((l) => [l.line_id, JSON.stringify(l)])), gone = res.removed.length === 1 ? menu.items.get(res.removed[0].item_id ?? "") : undefined; if (gone) for (const l of form.lines) { if (before.has(l.line_id) || l.item_id !== null || resolveSpan(l.span, menu).kind === "item") continue; const r = resolveSpan(`${gone.display_name} ${l.span}`, menu); if (r.kind === "item" && r.id !== gone.id && menu.items.get(r.id)?.category === gone.category) l.span = `${gone.display_name} ${l.span}`; } // "make it chicken" for the Cooper Cheese Steak: a replacement is read against the line it replaced before the whole menu
   for (const l of form.lines) bindLine(l, menu); for (const l of [...form.lines]) { if (l.item_id !== null) continue; const sp = words(l.span).map((w) => menu.vocab.has(w) || STOPWORDS.has(w) ? w : closestWord(w, menu.vocab) ?? w).join(" "), cw = contentWords(sp); if (!(l.status.kind === "unresolved" || (l.status.kind === "ambiguous" && !before.has(l.line_id) && !l.status.candidates.some((id) => isWordSubset(cw, menu.items.get(id)?.words ?? []))))) continue; const hosts = form.lines.filter((h) => h.item_id && menu.items.get(h.item_id)!.groups.some((g) => g.kind === "modifier" && matchChoice(sp, g).kind === "one")); if (hosts.length === 1) { hosts[0].held.push(sp); bindLine(hosts[0], menu); form.lines.splice(form.lines.indexOf(l), 1); } } // "cheeseburger" then "frencch fries" where fries are only the burger's swap: the burger's option, not an unknown item, and not the "Fried" Shrimp Basket a stem would guess
-  // identical lines merge: "add two more hot dogs" is 3 × Hot Dog on one ticket row, not two rows
+  for (const b of [...form.lines]) { const was = before.has(b.line_id) ? JSON.parse(before.get(b.line_id)!) as Line : null; if (!was || was.item_id || was.status.kind !== "ambiguous" || !b.item_id || was.status.candidates.includes(b.item_id) || !form.lines.some((a) => a !== b && a.item_id === b.item_id)) continue; form.lines.splice(form.lines.indexOf(b), 1); ledger.push({ turn: t, event: "vague_line_named_an_existing_line", data: { line_id: b.line_id, item_id: b.item_id } }); } // "some sandwiches" answered with "the cooper cheese steak" already on its own line points at that line, it does not order a second (FNA's 10-10). Identical lines merge: "add two more hot dogs" is 3 × Hot Dog on one ticket row, not two rows
   for (let i = 0; i < form.lines.length; i++) for (let j = form.lines.length - 1; j > i; j--) {
     const a = form.lines[i], b = form.lines[j], same = (l: Line) => JSON.stringify([l.item_id, l.choices, l.modifiers, l.notes, l.selections ?? null]);
     if (a.item_id && a.status.kind === "complete" && b.status.kind === "complete" && same(a) === same(b)) { a.qty += b.qty; form.lines.splice(j, 1); res.touched.push(a.line_id); ledger.push({ turn: t, event: "lines_merged", data: { into: a.line_id, from: b.line_id } }); }
@@ -299,7 +299,7 @@ export function turn(input: TurnInput): TurnOutput {
   const stripNotes = (f: OrderForm) => JSON.stringify({ ...f, lines: f.lines.map((l) => ({ ...l, notes: [], held: [] })), open: null, asked: null, turn_no: 0 });
   const progress = res.ledger.some(isProgress) && stripNotes(form) !== stripNotes(input.form);
   // a remark, a menu question or a cart read-back is a conversation, not a customer who is stuck
-  const conversational = res.talk !== null || res.askMenu !== undefined || res.showCart || asksWait(input.message);
+  const conversational = res.talk !== null || res.askMenu !== undefined || res.showCart || asksWait(input.message) || asksHours(input.message);
   let q: OpenQuestion | null = next(form, menu, res.refAsk);
   if (form.relink && q?.kind === "confirm") { form.confirmed = true; form.status = "awaiting_payment"; ledger.push({ turn: t, event: "relink_after_change" }); q = next(form, menu, res.refAsk); } // the customer already confirmed once; the change was theirs, so the updated order and the new link go out together
   let key = questionKey(q), count = key !== null && key === form.asked.key && !progress ? (conversational ? form.asked.count : form.asked.count + 1) : 0;
@@ -372,7 +372,7 @@ export function turn(input: TurnInput): TurnOutput {
   if (res.askMenu !== undefined) info = res.askMenu === null && input.form.open?.kind === "line_ambiguous" ? null : (res.askMenu === null || (input.form.open?.kind === "line_slot" && aboutFocus(res.askMenu))) && input.form.open && "line_id" in input.form.open ? questionOptions(input.form, menu) : menuInfo(res.askMenu, menu, asksPrice(input.message));
   const sameKind = (a: string, b: string) => { const x = menu.items.get(a), y = menu.items.get(b); return !!x && !!y && (a === b || (!!x.facets.kind && x.facets.kind === y.facets.kind && x.category === y.category)); }; // the medium of a pizza already ordered as a large is the same thing
   if (info?.kind === "item") info = { ...info, answer: asksHave(input.message), in_cart: form.lines.some((l) => l.item_id && l.status.kind === "complete" && sameKind(l.item_id, (info as { item: { id: string } }).item.id)) }; // "do you have X?" gets "Yes, we do."; "what comes on X?" does not; an item already ordered is not offered its choices again
-  if (asksWait(input.message) && !info) info = { kind: "eta" }; // "how long is the wait?": the same promise the pay sentence makes
+  if (asksHours(input.message) && !info) info = { kind: "hours" }; else if (asksWait(input.message) && !info) info = { kind: "eta" }; // "how long is the wait?": the same promise the pay sentence makes
   if (res.control?.what === "human") info = { kind: "human" };
   if (res.control?.what === "cancel") info = { kind: "cancelled" };
   if (res.control?.what === "start_over") info = { kind: "started_over" };

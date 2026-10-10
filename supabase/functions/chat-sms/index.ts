@@ -2529,7 +2529,7 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
     const { data: eightySix } = await supabase.from("availability_overrides").select("menu_item_id").eq("shop_id", shop.id).eq("business_date", getBusinessDate(shop.timezone ?? "America/New_York"));
     const engineOut = await runCleanEngineTurn(
       {
-        shop: { id: shop.id, tenant_id: shop.tenant_id, name: shop.name, delivery_enabled: shop.delivery_enabled === true && !(shop.delivery_paused_until && new Date(shop.delivery_paused_until) > new Date()), delivery_fee_cents: shop.delivery_fee_cents, tax_rate_bps: shop.tax_rate_bps ?? 0, phone_number_e164: shop.phone_number_e164, latitude: shop.latitude, longitude: shop.longitude, delivery_radius_mi: shop.delivery_radius_mi, delivery_provider: courierShop.delivery_provider ?? "own", sold_out: ((eightySix ?? []) as Array<{ menu_item_id: string }>).map((r) => r.menu_item_id) },
+        shop: { id: shop.id, tenant_id: shop.tenant_id, name: shop.name, hours: shopHours((shop as { open_hours?: Record<string, unknown> | null }).open_hours ?? null, shop.timezone ?? "America/New_York"), delivery_enabled: shop.delivery_enabled === true && !(shop.delivery_paused_until && new Date(shop.delivery_paused_until) > new Date()), delivery_fee_cents: shop.delivery_fee_cents, tax_rate_bps: shop.tax_rate_bps ?? 0, phone_number_e164: shop.phone_number_e164, latitude: shop.latitude, longitude: shop.longitude, delivery_radius_mi: shop.delivery_radius_mi, delivery_provider: courierShop.delivery_provider ?? "own", sold_out: ((eightySix ?? []) as Array<{ menu_item_id: string }>).map((r) => r.menu_item_id) },
         conversationId: conversation.id as string,
         cart: { id: cart.id, engine_form: cart.engine_form ?? null, test_mode: cart.test_mode, stripe_checkout_session_id: cart.stripe_checkout_session_id, notes: cart.notes },
         message: userMessage,
@@ -2614,4 +2614,18 @@ export async function handleChatSmsRequest(req: Request): Promise<Response> {
 
 if (import.meta.main) {
   Deno.serve(handleChatSmsRequest);
+}
+
+/** shops.open_hours (per day: [{open,close}] or {open,close,closed}) -> today's span and the week's runs, for the engine's hours answer. */
+function shopHours(oh: Record<string, unknown> | null, tz: string, now = new Date()): { today: string | null; week: string } | null {
+  if (!oh || typeof oh !== "object") return null;
+  const DAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"], label = (d: string) => d[0].toUpperCase() + d.slice(1);
+  const clock = (hm: string) => { const [h, m] = hm.split(":").map(Number); if (h === 23 && m === 59) return "midnight"; const ap = h >= 12 ? "PM" : "AM", h12 = h % 12 === 0 ? 12 : h % 12; return m ? `${h12}:${String(m).padStart(2, "0")} ${ap}` : `${h12} ${ap}`; };
+  const span = (d: string): string | null => { const v = oh[d]; const r = (Array.isArray(v) ? v[0] : v) as { open?: string; close?: string; closed?: boolean } | undefined;
+    return !r || r.closed || !r.open || !r.close ? null : r.open === "00:00" && r.close === "23:59" ? "all day" : `${clock(r.open)} to ${clock(r.close)}`; };
+  const spans = DAYS.map(span); if (spans.every((x) => x === null)) return null;
+  const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(now));
+  const runs: Array<{ from: string; to: string; s: string }> = [];
+  for (let i = 1; i <= 7; i++) { const d = DAYS[i % 7], s = spans[i % 7]; if (!s) continue; const last = runs[runs.length - 1]; if (last && spans[(i - 1) % 7] === s) last.to = d; else runs.push({ from: d, to: d, s }); }
+  return { today: spans[dow] ?? null, week: runs.map((r) => `${label(r.from)}${r.to !== r.from ? "-" + label(r.to) : ""} ${r.s}`).join(", ") };
 }

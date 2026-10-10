@@ -1,7 +1,7 @@
 // templates.ts - every string a customer can read. Nothing else in the engine
 // builds customer-facing text. Money arrives here already formatted by price.ts.
 
-export interface Voice { shop_name: string; phone_display: string | null }
+export interface Voice { shop_name: string; phone_display: string | null; hours?: { today: string | null; week: string } | null }
 
 const SIZE_ORDER = ["personal", "small", "medium", "large", "xlarge", "sheet", "cup", "bowl", "half", "whole", "regular"];
 export function sortSizes(sizes: string[]): string[] {
@@ -140,7 +140,8 @@ export const T = {
   offerExtras: (itemName: string, comes: string | null, groupName: string, extras: string[]) => `${itemName}${comes ? `: ${comes.replace(/\.$/, "")}.` : "."} Want it like that, or any ${groupName}? ${extras.join(", ")}.`, // "OPTIONS" for a 13-flavor slot shows all 13
   menuCategories: (cats: string[]) => `Categories: ${cats.join(", ")}. Name an item or a category.`,
   unknownInfo: () => `I can help you order. Name an item or ask about one.`,
-  human: (v: Voice) => (v.phone_display ? `You can reach the shop at ${v.phone_display}.` : `Someone from the shop will follow up with you.`),
+  human: (v: Voice) => (v.phone_display ? `You can reach the shop at ${v.phone_display}.` : `I can't connect you to a person from this chat, but I can help with your order.`), // nothing alerts the shop: never promise a follow-up
+  hours: (h: { today: string | null; week: string } | null) => !h ? `I don't have today's hours here.` : `${h.today === null ? "We're closed today." : h.today === "all day" ? "We're open all day today." : `Today we're open ${h.today}.`} Hours: ${h.week}.`,
   cancelled: () => `Okay, I've cancelled that order. Text us anytime to start a new one.`,
   startedOver: () => `Okay, starting fresh.`,
   noEta: () => `Pickup orders are usually ready in about 10-15 minutes, delivery in about 30-45.`,

@@ -25,7 +25,7 @@ export function resolveSpan(span: string, menu: Menu): SpanResolution {
   const sw = words(span);
   if (sw.length === 0) return { kind: "none" };
   // "hawiaan", "peperoni": a word the menu does not know, one edit from one it does, is that word (before anything else reads the span)
-  const fixed = sw.map((w) => menu.vocab.has(w) || STOPWORDS.has(w) || SIZE_WORDS.has(w) ? w : closestWord(w, menu.vocab) ?? w);
+  const fixed = sw.map((w) => menu.vocab.has(w) || STOPWORDS.has(w) || SIZE_WORDS.has(w) || (w.length < 5 && contentWords(span).length < 2) ? w : closestWord(w, menu.vocab) ?? w);
   if (fixed.some((w, i) => w !== sw[i])) return resolveSpan(fixed.join(" "), menu);
   // "bacon cheese burger": two adjacent words an item NAME writes as one ("cheeseburger") are that word; a squashed lexicon row ("buffalochicken") is not a name
   const named = (w: string) => menu.vocab.has(w) && [...menu.items.values()].some((it) => it.words.includes(w));
@@ -229,7 +229,7 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true)
     const sib = [...menuRef.items.values()].find((i) => i.orderable && i.category === item.category && i.facets.kind === item.facets.kind && i.facets.size === sw[0]);
     if (sib) { line.item_id = sib.id; line.choices = {}; line.modifiers = []; return true; }
   }
-  const own = ownWords(item); const alt = resolveSpan(`${item.display_name} ${text}`, menuRef), si = alt.kind === "item" ? menuRef.items.get(alt.id) : undefined; if (si && si.id !== item.id && si.orderable && si.category === item.category && contentWords(item.display_name).every((w) => si.words.some((x) => sameWord(x, w)))) { line.item_id = si.id; line.choices = {}; line.modifiers = []; return true; } // "Cooper Cheese Steak" + "chicken": the row the menu names for both ("Cooper Chicken Cheese Steak"), like the size sibling above
+  const own = ownWords(item); const alt = resolveSpan(`${item.display_name} ${text}`, menuRef), si = alt.kind === "item" ? menuRef.items.get(alt.id) : undefined; if (si && si.id !== item.id && si.orderable && contentWords(item.display_name).every((w) => si.words.some((x) => sameWord(x, w)))) { line.item_id = si.id; line.choices = {}; line.modifiers = []; return true; } // "Cooper Cheese Steak" + "chicken": the row the menu names for both ("Cooper Chicken Cheese Steak"), like the size sibling above
   if (sw.every((w) => own.has(w) || own.has(singular(w)))) return true; // restating the item name or size
   if (sw.every((w) => SIZE_ONLY.has(w))) return false; // a size on an item that has no sizes: not an instruction
   if (mayNote && !answer && !line.notes.includes(text)) line.notes.push(text); // said twice is one note; an unreadable answer to the slot we asked is a re-ask, never a kitchen note
@@ -241,7 +241,7 @@ function applyHeldSpan(line: Line, item: MenuItem, span: string, mayNote = true)
  * Returns the item it ended on, if any.
  */
 export function bindLine(line: Line, menu: Menu): void {
-  menuTermWords = menu.termWordsByItem; menuRef = menu; filledNow = new Set(); if (line.item_id === null && line.status.kind !== "ambiguous" && resolveSpan(line.span, menu).kind === "none") { const w = words(line.span), i = w.indexOf("with"); if (i > 0 && resolveSpan(w.slice(0, i).join(" "), menu).kind !== "none") { line.held.push(...splitList(w.slice(i + 1).join(" "))); line.span = w.slice(0, i).join(" "); } } // the model left "boneless wing basket with fries and hot sauce" whole: the item is before "with", its options after
+  menuTermWords = menu.termWordsByItem; menuRef = menu; filledNow = new Set(); if (line.item_id === null && line.status.kind !== "ambiguous" && resolveSpan(line.span, menu).kind === "none") { const w = words(line.span), i = w.indexOf("with"); if (i > 0 && resolveSpan(w.slice(0, i).join(" "), menu).kind !== "none") { line.held.push(...splitList(w.slice(i + 1).join(" "))); line.span = w.slice(0, i).join(" "); } else if (i < 0) for (let k = w.length - 1; k > 0; k--) { const r = resolveSpan(w.slice(0, k).join(" "), menu); if (r.kind !== "item") continue; const gs = menu.items.get(r.id)!.groups, rest = w.slice(k), fits = (t: string) => gs.some((g) => { const m = matchChoice(t, g); return m.kind === "one" && words(t).every((x) => g.choices.find((c) => c.id === m.choice_id)!.words.some((cw) => sameWord(cw, x))); }); const got: string[] = []; for (let a = 0; a < rest.length;) { let b = rest.length; while (b > a && !fits(rest.slice(a, b).join(" "))) b--; if (b > a) { got.push(rest.slice(a, b).join(" ")); a = b; } else if (STOPWORDS.has(rest[a])) a++; else { got.length = 0; break; } } if (got.length) { line.held.push(...got); line.span = w.slice(0, k).join(" "); } break; } } // the model left "boneless wing basket with fries and hot sauce" (or "cooper cheese steak seeded roll n fries") whole: the item is the longest leading run that names one, its options after, and only when every leftover word is one ("garlic bread" is not Garlic Knots + "bread")
   // An unresolved line whose customer gave a replacement span: swap the span.
   if (line.item_id === null && line.status.kind === "unresolved" && (line.answers?.length ?? 0) > 0) {
     const first = line.answers![0];
