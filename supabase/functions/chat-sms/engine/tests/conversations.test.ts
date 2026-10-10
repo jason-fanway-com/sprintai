@@ -1752,3 +1752,23 @@ Deno.test("86: an item sold out today is never sold; the customer is told, other
   assert(!o.form.lines.some((l) => l.item_id === IDS.cheeseburger), o.reply);
   assert(o.form.lines.some((l) => l.span.includes("garlic knots")), o.reply);
 });
+
+Deno.test("Erin 10-10: \"I want pizza\" is an order (what kind, Cheese first), a pie is a pizza, and a menu request is the menu whatever the model said", () => {
+  let f = newForm("vitos", "test-v1");
+  f = say(f, "pickup").form;
+  let o = say(f, "I want pizza", [{ kind: "ask_menu", about_span: "pizza" }]);
+  assertEquals(o.form.open?.kind, "line_ambiguous");
+  assertStringIncludes(o.reply, "What kind of pizza? We have Cheese");
+  o = say(f, "I'd like a pie", [{ kind: "add_line", item_span: "pie", qty: 1, option_spans: [] }]);
+  assertStringIncludes(o.reply, "What kind of pizza?");
+  o = say(f, "can I see the menu please?", [{ kind: "control", what: "show_cart" }]);
+  assertStringIncludes(o.reply, "Categories:");
+});
+
+Deno.test("FNA 10-10: an hours question is answered from the shop's hours, and nothing promises a follow-up the shop never hears about", () => {
+  const f = say(newForm("vitos", "test-v1"), "pickup").form;
+  const o = turn({ form: f, menu, message: "what time do yall close tonight", moves: [], hours: { today: "4 PM to 9 PM", week: "Wed-Sat 4 PM to 9 PM" } });
+  assertStringIncludes(o.reply, "Today we're open 4 PM to 9 PM. Hours: Wed-Sat 4 PM to 9 PM.");
+  const h = turn({ form: f, menu: { ...menu, shop: { ...menu.shop, phone_display: null } }, message: "can you just call me", moves: [{ kind: "control", what: "human" }] });
+  assert(!h.reply.includes("follow up"), h.reply);
+});
