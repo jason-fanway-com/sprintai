@@ -47,8 +47,8 @@ TERMS = {
     "Pappardelle Bolognese": ["pasta", "pasta bolognese", "bolognese pasta"],
     "Crab & Shrimp Capellini": ["pasta", "seafood pasta", "shrimp pasta"],
     "Short Rib Ragu": ["pasta", "short rib pasta", "ragu pasta"],
-    "Fantasy Chicken Pasta": ["pasta"], "Rasta Chicken Pasta": ["pasta"], "Vodka Chix Parm Pesto Pasta": ["pasta"],
 }
+for _n in ("Fantasy Chicken Pasta", "Rasta Chicken Pasta", "Vodka Chix Parm Pesto Pasta"): TERMS.setdefault(_n, []).append("pasta")  # added, never a second key that replaces the list
 menu = e2e.get(f"menus?shop_id=eq.{SHOP}&source=eq.csv&select=id")[0]["id"]
 items = {i["name"]: i["id"] for i in e2e.get(f"menu_items?menu_id=eq.{menu}&active=eq.true&select=id,name")}
 missing = [n for n in TERMS if n not in items]
