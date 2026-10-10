@@ -128,7 +128,7 @@ Deno.test("narrowing: pizza -> what kind -> pepperoni -> what size -> large", ()
   f = say(f, "pickup").form;
   let o = say(f, "I want a pizza", [{ kind: "add_line", item_span: "pizza", qty: 1, option_spans: [] }]);
   assertEquals(o.form.open?.kind, "line_ambiguous");
-  assertStringIncludes(o.reply, "What kind of pizza? We have Cheese, Hawaiian, Margherita, Meat Lover, Mushrooms, Pepperoni.");
+  assertStringIncludes(o.reply, "What kind of pizza? We have Cheese, Pepperoni, Mushrooms, Hawaiian, Meat Lover, Margherita.");
   o = say(o.form, "pepperoni");
   assertStringIncludes(o.reply, "What size");
   assertStringIncludes(o.reply, "Small, Medium, or Large");

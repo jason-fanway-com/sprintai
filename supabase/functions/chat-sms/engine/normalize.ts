@@ -107,12 +107,12 @@ export function closestWord(w: string, vocab: Iterable<string>): string | null {
   return hits.length > 0 && hits.every((h) => h[0] > hits[0][0] || sameWord(h[1], hits[0][1])) ? hits[0][1] : null; // one clear winner (its plural is the same word), or nothing
 }
 function editDistance(a: string, b: string, max: number): number {
-  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  let prev2: number[] = [], prev = Array.from({ length: b.length + 1 }, (_, j) => j);
   for (let i = 1; i <= a.length; i++) {
     const cur = [i];
-    for (let j = 1; j <= b.length; j++) cur.push(Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)));
+    for (let j = 1; j <= b.length; j++) cur.push(Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1), i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1] ? prev2[j - 2] + 1 : Infinity)); // two swapped letters ("wnigs", "bruger") are one slip, not two
     if (Math.min(...cur) > max) return max + 1;
-    prev = cur;
+    prev2 = prev; prev = cur;
   }
   return prev[b.length];
 }

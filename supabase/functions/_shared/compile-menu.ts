@@ -832,6 +832,7 @@ export function categoryLexiconTerms(category: string): LexiconTerm[] {
   if (plural !== singular) {
     terms.push({ term: normaliseTerm(plural), target_type: "category", target_id: category, provenance: "stated" });
   }
+  if (singular === "pizza") for (const t of ["pie", "pies"]) terms.push({ term: t, target_type: "category", target_id: category, provenance: "stated" }); // what people text for a pizza ("I'd like a pie" found only the topping rows)
   return terms;
 }
 

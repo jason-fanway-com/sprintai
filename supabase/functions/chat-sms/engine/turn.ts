@@ -403,9 +403,9 @@ function menuInfo(about: string | null, menu: Menu, price: boolean): Info {
   const r = resolveSpan(about, menu);
   if (r.kind === "item") { const item = menu.items.get(r.id)!; return { kind: "item", item, unit_cents: unitCents({ line_id: 0, span: about, item_id: item.id, qty: 1, choices: {}, modifiers: [], held: [], notes: [], slot_candidates: {}, status: { kind: "complete" as const } }, item), price }; }
   if (r.kind === "ambiguous") {
-    const its = r.ids.map((id) => menu.items.get(id)!), kinds = new Set(its.map((i) => i.facets.kind ?? i.display_name));
+    const order = [...menu.items.keys()], its = [...r.ids].sort((a, b) => order.indexOf(a) - order.indexOf(b)).map((id) => menu.items.get(id)!), kinds = new Set(its.map((i) => i.facets.kind ?? i.display_name));
     if (kinds.size === 1 && its.every((i) => i.facets.size)) { const first = its.find((i) => i.description) ?? its[0]; return { kind: "item", item: first, unit_cents: first.base_cents, sizes: its.map((i) => ({ name: i.facets.size!, cents: i.base_cents })), price }; } // one pizza in three sizes: describe it once, list the sizes
-    return { kind: "list", names: its.map((i) => i.display_name), descs: its.length <= 5 && its.some((i) => i.description) ? its.map((i) => i.description) : undefined };
+    if (its.every((i) => i.facets.size) && kinds.size > 1) return { kind: "list", names: [...new Set(its.map((i) => i.display_name.split(" ").filter((w) => w.toLowerCase() !== i.facets.size).join(" ")))] }; return { kind: "list", names: its.map((i) => i.display_name), descs: its.length <= 5 && its.some((i) => i.description) ? its.map((i) => i.description) : undefined }; // "what pizzas do you have": each kind once, not every size row
   }
   const cat = itemsInCategory(menu, about);
   return cat.length ? { kind: "list", names: cat.map((i) => i.display_name) } : { kind: "not_found", about };
@@ -414,7 +414,7 @@ function menuInfo(about: string | null, menu: Menu, price: boolean): Info {
 /** "what are the options?" while a line question is open lists that question's choices. */
 function questionOptions(form: OrderForm, menu: Menu): Info {
   const open = form.open!, l = "line_id" in open ? form.lines.find((x) => x.line_id === open.line_id) : undefined, item = l?.item_id ? menu.items.get(l.item_id) : null;
-  if (l?.status.kind === "ambiguous") return { kind: "list", names: l.status.candidates.map((id) => menu.items.get(id)?.display_name ?? id) };
+  if (l?.status.kind === "ambiguous") { const order = [...menu.items.keys()]; return { kind: "list", names: [...l.status.candidates].sort((a, b) => order.indexOf(a) - order.indexOf(b)).map((id) => menu.items.get(id)?.display_name ?? id) }; }
   const g = item && l?.status.kind === "needs_slot" ? item.groups.find((x) => x.id === (l.status as { group_id: string }).group_id) : undefined;
   return g ? { kind: "list", names: g.choices.map((c) => c.name) } : item?.bundle ? { kind: "list", names: item.bundle.choices.map((c) => c.name) } : menuInfo(null, menu, false);
 }
