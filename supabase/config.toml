@@ -126,3 +126,6 @@ verify_jwt = false  # the approve page has no session; the emailed one-time toke
 
 [functions.refund-order]
 verify_jwt = false  # checks the caller itself: the shop owner, an OrderFare admin, or an internal caller
+
+[functions.contact-card]
+verify_jwt = false  # fetched by the carrier with no credentials when the card rides on an MMS receipt
