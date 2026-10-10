@@ -274,6 +274,7 @@ interface Shop {
   timezone:                string;
   email_ticket_recipient:  string | null;
   is_paused:               boolean;
+  contact_card_enabled?:   boolean;  // migration 155: the first paid receipt carries the shop contact card
   pause_message:           string | null;
   paused_until?:           string | null;
   delivery_enabled:         boolean;
@@ -714,6 +715,7 @@ async function sendSmsViaTwilio(
   toNumber:   string,
   message:    string,
   messageId?: string | null,
+  mediaUrls?: string[],
 ): Promise<void> {
   message = toGsm7(message); // one non-GSM character doubles the segments
   const accountSid = Deno.env.get("TWILIO_ACCOUNT_SID") ?? "";
@@ -733,14 +735,18 @@ async function sendSmsViaTwilio(
           "Authorization": `Basic ${btoa(`${accountSid}:${authToken}`)}`,
           "Content-Type":  "application/x-www-form-urlencoded",
         },
-        body: new URLSearchParams({
-          From: fromNumber,
-          To: toNumber,
-          Body: message,
-          ...(Deno.env.get("TWILIO_MESSAGING_SERVICE_SID")
-            ? { MessagingServiceSid: Deno.env.get("TWILIO_MESSAGING_SERVICE_SID")! }
-            : {}),
-        }),
+        body: (() => {
+          const form = new URLSearchParams({
+            From: fromNumber,
+            To: toNumber,
+            Body: message,
+            ...(Deno.env.get("TWILIO_MESSAGING_SERVICE_SID")
+              ? { MessagingServiceSid: Deno.env.get("TWILIO_MESSAGING_SERVICE_SID")! }
+              : {}),
+          });
+          for (const u of mediaUrls ?? []) form.append("MediaUrl", u); // an attachment makes it an MMS (the contact card)
+          return form;
+        })(),
       }
     );
 
@@ -802,6 +808,7 @@ async function sendSmsViaTelnyx(
   toNumber:   string,
   message:    string,
   messageId?: string | null,
+  mediaUrls?: string[],
 ): Promise<void> {
   message = toGsm7(message); // one non-GSM character doubles the segments
   const apiKey = Deno.env.get("TELNYX_API_KEY") ?? "";
@@ -817,7 +824,7 @@ async function sendSmsViaTelnyx(
         "Authorization": `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ from: fromNumber, to: toNumber, text: message }),
+      body: JSON.stringify({ from: fromNumber, to: toNumber, text: message, ...(mediaUrls?.length ? { media_urls: mediaUrls } : {}) }),
     });
 
     if (res.ok) {
@@ -1182,6 +1189,7 @@ async function sendSms(
   toNumber:   string,
   message:    string,
   messageId?: string | null,
+  mediaUrls?: string[],
 ): Promise<void> {
   const cleaned = stripEmDashes(message);
   const segCount = outboundSegmentCount(cleaned);
@@ -1199,11 +1207,11 @@ async function sendSms(
   // an already-confirmed row back toward "unsent."
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i];
-    const partMessageId = i === 0 ? messageId : undefined;
+    const partMessageId = i === 0 ? messageId : undefined, partMedia = i === 0 ? mediaUrls : undefined; // an attachment rides on the first part only
     if (provider === "telnyx") {
-      await sendSmsViaTelnyx(supabase, shopId, ctx, fromNumber, toNumber, part, partMessageId);
+      await sendSmsViaTelnyx(supabase, shopId, ctx, fromNumber, toNumber, part, partMessageId, partMedia);
     } else {
-      await sendSmsViaTwilio(supabase, ctx, fromNumber, toNumber, part, partMessageId);
+      await sendSmsViaTwilio(supabase, ctx, fromNumber, toNumber, part, partMessageId, partMedia);
     }
   }
 }
@@ -1239,6 +1247,7 @@ export async function handleSystemEvent(
 
   let message: string;
   let deliveryNotice: string | null = null; // delivery_update: the status this text announces (guard evidence)
+  let contactCardUrl: string | null = null; // payment_confirmed: the shop's contact card, first receipt only
 
   // ── ALLOWED TRANSACTIONAL EXCEPTIONS (lead directive 2026-06-22) ──────────
   // Only payment_confirmed (paid receipt) and order_refunded (refund notice)
@@ -1284,6 +1293,15 @@ export async function handleSystemEvent(
       ? (courier?.tracking_url ? `A courier is booked. Track it or add drop-off notes here: ${courier.tracking_url}` : "On its way in about 30-45 min")
       : `Ready for pickup in about 10-15 min${closePart}`;
     message = `Payment confirmed!${orderNum}Order${pickup}: ${items}. Total: $${total}. ${readyPart}.`;
+    // the shop's contact card (logo as the contact photo) rides on a customer's FIRST paid receipt, by text only.
+    // Off per shop (contact_card_enabled) until its 10DLC campaign declares embedded phone numbers.
+    if (shop.contact_card_enabled === true && shop.phone_number_e164 && conversation.channel === "sms" && conversation.customer_phone) {
+      const { data: cust } = await supabase.from("customers").select("contact_card_sent_at").eq("tenant_id", conversation.tenant_id).eq("customer_phone", conversation.customer_phone).maybeSingle();
+      if (!(cust as { contact_card_sent_at?: string | null } | null)?.contact_card_sent_at) {
+        contactCardUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/contact-card/${shop.id}.vcf`;
+        message += ` Tap the card to save our number for next time.`;
+      }
+    }
   } else if (system_event === "delivery_update") {
     // ALLOWED EXCEPTION #3: courier progress on this paid delivery, sent by delivery-webhook on a forward move.
     // The status is read here, never taken from the caller, and each status is announced once (claimDeliveryNotice).
@@ -1586,7 +1604,11 @@ export async function handleSystemEvent(
     if (!shop.phone_number_e164) {
       console.error("[chat-sms] Shop has no phone number configured for SMS confirmation");
     } else {
-      await sendSms(supabase, shop.tenant_id, txnCtx, resolveSmsProvider(shop), shop.phone_number_e164, conversation.customer_phone, message, savedSystemMsgId);
+      await sendSms(supabase, shop.tenant_id, txnCtx, resolveSmsProvider(shop), shop.phone_number_e164, conversation.customer_phone, message, savedSystemMsgId, contactCardUrl ? [contactCardUrl] : undefined);
+      if (contactCardUrl) { // once per customer: recorded after the send, on the CRM row (created here if the CRM has not yet)
+        const { error } = await supabase.from("customers").upsert({ tenant_id: conversation.tenant_id, customer_phone: conversation.customer_phone, contact_card_sent_at: new Date().toISOString() }, { onConflict: "tenant_id,customer_phone" });
+        if (error) console.warn(`[chat-sms] contact card sent but not recorded: ${error.message}`);
+      }
     }
   } else if (conversation.customer_phone?.startsWith("web:imsg-")) {
     // iMessage bridge: extract real phone from "web:imsg-{identifier}-{sessionid}"
