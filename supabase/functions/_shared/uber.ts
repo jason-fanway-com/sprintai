@@ -113,6 +113,26 @@ export class UberApiError extends Error {
 
 // ─── token cache ───────────────────────────────────────────────────────────
 const tokens = new Map<string, { token: string; until: number }>();
+/** The database copy of a token (migration 154), shared by every isolate; absent env (tests) or any error falls back to memory. */
+async function sharedToken(clientId: string): Promise<{ token: string; until: number } | null> {
+  const url = Deno.env.get("SUPABASE_URL"), key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!url || !key) return null;
+  try {
+    const r = await fetch(`${url}/rest/v1/provider_tokens?provider=eq.uber&client_id=eq.${encodeURIComponent(clientId)}&select=token,expires_at`, { headers: { apikey: key, Authorization: `Bearer ${key}` } });
+    if (!r.ok) return null;
+    const rows = await r.json() as Array<{ token: string; expires_at: string }>;
+    const until = rows[0] ? new Date(rows[0].expires_at).getTime() : 0;
+    return rows[0] && until > Date.now() ? { token: rows[0].token, until } : null;
+  } catch { return null; }
+}
+async function saveSharedToken(clientId: string, token: string, until: number): Promise<void> {
+  const url = Deno.env.get("SUPABASE_URL"), key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!url || !key) return;
+  try {
+    await fetch(`${url}/rest/v1/provider_tokens?on_conflict=provider,client_id`, { method: "POST", headers: { apikey: key, Authorization: `Bearer ${key}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify({ provider: "uber", client_id: clientId, token, expires_at: new Date(until).toISOString(), updated_at: new Date().toISOString() }) });
+  } catch { /* memory still has it */ }
+}
 /** test seam */
 export function _clearUberTokens(): void { tokens.clear(); }
 
@@ -146,6 +166,9 @@ export function makeUberProvider(cfg: UberConfig, fetchImpl: typeof fetch = fetc
   async function token(): Promise<string> {
     const hit = tokens.get(cfg.client_id);
     if (hit && hit.until > Date.now()) return hit.token;
+    // every isolate shares one token through the database: a fresh token per cold start hit Uber's 429 (2026-10-10)
+    const shared = fetchImpl === fetch ? await sharedToken(cfg.client_id) : null;
+    if (shared) { tokens.set(cfg.client_id, shared); return shared.token; }
     // eats.deliveries is the documented scope; some Direct organizations' keys refuse it by name (invalid_scope)
     // yet carry delivery access by default, so ask once more without naming a scope before giving up
     for (const scope of ["eats.deliveries", null]) {
@@ -158,6 +181,7 @@ export function makeUberProvider(cfg: UberConfig, fetchImpl: typeof fetch = fetc
         const j = await res.json() as { access_token: string; expires_in?: number };
         const ttl = Math.max(60, (j.expires_in ?? 3600) - 300) * 1000; // refresh five minutes early
         tokens.set(cfg.client_id, { token: j.access_token, until: Date.now() + ttl });
+        if (fetchImpl === fetch) await saveSharedToken(cfg.client_id, j.access_token, Date.now() + ttl);
         return j.access_token;
       }
       // OAuth errors are a short code ("invalid_client", "invalid_scope"); keep only that, never the rest of the body
