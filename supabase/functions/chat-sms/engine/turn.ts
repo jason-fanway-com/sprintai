@@ -9,14 +9,14 @@ import { priceLine, totals, unitCents } from "./price.ts";
 import { render, type Ack, type Decline, type Info, type Question, type ReplyPlan } from "./render.ts";
 import type { Voice } from "./templates.ts";
 import { itemsInCategory } from "./menu.ts";
-import { contentWords, leadingCount, splitList, words, findWordRun, isWordSubset, sameWord, sameWords, STOPWORDS, SIZE_WORDS, withoutCountry, normalize, closestWord } from "./normalize.ts";
+import { contentWords, leadingCount, splitList, words, findWordRun, isWordSubset, sameWord, sameWords, singular, STOPWORDS, SIZE_WORDS, withoutCountry, normalize, closestWord } from "./normalize.ts";
 
 export interface TurnInput {
   form: OrderForm;
   menu: Menu;
   message: string;
   moves: Move[];
-  greet?: boolean;
+  greet?: boolean; hours?: Voice["hours"];
   checkoutUrl?: string | null;
   /** the moves came from the closed vocabulary: the whole message was the answer, nothing in it is an item */
   closed?: boolean;
@@ -43,7 +43,7 @@ function isProgress(e: LedgerEntry): boolean {
 
 export function turn(input: TurnInput): TurnOutput {
   const menu = input.menu;
-  const voice: Voice = { shop_name: menu.shop.name, phone_display: menu.shop.phone_display };
+  const voice: Voice = { shop_name: menu.shop.name, phone_display: menu.shop.phone_display, hours: input.hours ?? null };
   const form0: OrderForm = structuredClone(input.form);
   form0.turn_no += 1;
   const ledger: LedgerEntry[] = [];
@@ -245,7 +245,7 @@ export function turn(input: TurnInput): TurnOutput {
     }
   }
 
-  // 3. apply
+  for (const om of [...rec.omissions]) if (!moves.some((m) => m.kind === "add_line") && menu.categoryTerms.some((ct) => sameWords(ct.wordsSing, words(om.span).map(singular)))) { moves.push({ kind: "add_line", item_span: om.span, qty: om.qty, option_spans: [] }); rec.omissions.splice(rec.omissions.indexOf(om), 1); ledger.push({ turn: t, event: "category_omission_is_a_line", data: { span: om.span } }); } // "I want pizza for delivery" with the pizza dropped: what kind, not "did you also want pizza?". 3. apply
   const matcher: LineMatcher = Object.assign((line: Line, span: string) => lineMatchesSpan(line, span, menu), { named: (line: Line, span: string) => lineNamedBySpan(line, span, menu) });
   const res = apply(form0, moves, matcher);
   const form = res.form;
@@ -405,7 +405,7 @@ function menuInfo(about: string | null, menu: Menu, price: boolean): Info {
   if (r.kind === "ambiguous") {
     const order = [...menu.items.keys()], its = [...r.ids].sort((a, b) => order.indexOf(a) - order.indexOf(b)).map((id) => menu.items.get(id)!), kinds = new Set(its.map((i) => i.facets.kind ?? i.display_name));
     if (kinds.size === 1 && its.every((i) => i.facets.size)) { const first = its.find((i) => i.description) ?? its[0]; return { kind: "item", item: first, unit_cents: first.base_cents, sizes: its.map((i) => ({ name: i.facets.size!, cents: i.base_cents })), price }; } // one pizza in three sizes: describe it once, list the sizes
-    if (its.every((i) => i.facets.size) && kinds.size > 1) return { kind: "list", names: [...new Set(its.map((i) => i.display_name.split(" ").filter((w) => w.toLowerCase() !== i.facets.size).join(" ")))] }; return { kind: "list", names: its.map((i) => i.display_name), descs: its.length <= 5 && its.some((i) => i.description) ? its.map((i) => i.description) : undefined }; // "what pizzas do you have": each kind once, not every size row
+    if (its.some((i) => i.facets.size) && kinds.size > 1) return { kind: "list", names: [...new Set(its.map((i) => i.display_name.split(" ").filter((w) => w.toLowerCase() !== i.facets.size).join(" ")))] }; return { kind: "list", names: its.map((i) => i.display_name), descs: its.length <= 5 && its.some((i) => i.description) ? its.map((i) => i.description) : undefined }; // "what pizzas do you have": each kind once, not every size row
   }
   const cat = itemsInCategory(menu, about);
   return cat.length ? { kind: "list", names: cat.map((i) => i.display_name) } : { kind: "not_found", about };

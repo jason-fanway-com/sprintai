@@ -115,7 +115,7 @@ export async function loadMenu(supabase: SupabaseClient, shop: RunnerShop, servi
   if (cached && cached.version === version && Date.now() - cached.at < MENU_TTL_MS) return cached.menu;
   console.log(`[engine] menu load shop=${shop.id.slice(0, 8)} reason=${!cached ? "cold" : cached.version !== version ? "changed" : "expired"}`);
   const items = menuId ? await pageAll<RawMenuItem>((a, b) => supabase.from("menu_items")
-    .select("id, name, display_name, description, category, price_cents, bot_state, ask_plan, is_derived, derived_from, size_label, meta")
+    .select("id, name, display_name, description, category, price_cents, bot_state, ask_plan, is_derived, derived_from, size_label, meta, display_order")
     .eq("menu_id", menuId).eq("active", true).order("id", { ascending: true }).range(a, b)) : [];
   const ids = items.map((i) => i.id);
   const groups: Array<{ id: string; menu_item_id: string; name: string; max_select: number | null; default_choice_id: string | null }> = [];
@@ -137,7 +137,7 @@ export async function loadMenu(supabase: SupabaseClient, shop: RunnerShop, servi
     phone_display: shop.phone_number_e164 ?? null,
     ask_order: ["fulfillment", "address", "items", "tip", "confirm"],
   };
-  const menu = buildMenu({ version: `${menuId ?? "none"}:${latest}:${items.length}`, items, lexicon, shop: shopCfg });
+  items.sort((a, b) => ((a as { display_order?: number | null }).display_order ?? 1e9) - ((b as { display_order?: number | null }).display_order ?? 1e9)); const menu = buildMenu({ version: `${menuId ?? "none"}:${latest}:${items.length}`, items, lexicon, shop: shopCfg }); // the menu's own order ("What kind of pizza?" led with Buffalo Chicken: uuid order)
   menuCache.set(shop.id, { at: Date.now(), version, menu });
   return menu;
 }
@@ -223,7 +223,7 @@ export async function runEngineTurn(input: RunnerInput, deps: RunnerDeps): Promi
   }
 
   // 3. the turn
-  const turnInput = { form: form0, menu, message: input.message, moves, closed, greet: input.isFirstContact && form0.turn_no === 0, checkoutUrl: form0.checkout_url ?? null };
+  const turnInput = { form: form0, menu, message: input.message, moves, closed, greet: input.isFirstContact && form0.turn_no === 0, checkoutUrl: form0.checkout_url ?? null, hours: input.shop.hours ?? null };
   let out = turn(turnInput);
   // 3b. an uncovered mention the second reader wants to ask about goes to the judge first; the turn is
   // pure, so it is simply run again with the answers. A failed or slow judge means today's question.
