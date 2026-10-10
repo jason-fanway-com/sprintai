@@ -92,7 +92,7 @@ export function reconcile(message: string, moves: Move[], menu: Menu, alreadyAsk
     if (anyCovered) continue;
     const span = mw.slice(h.start, h.end).join(" ");
     if (alreadyAskedSpans.has(span)) continue;
-    if ((h.start > 0 && NEGATION.has(mw[h.start - 1])) || (h.start > 1 && NEGATION.has(mw[h.start - 2]))) continue; // "no wraps", "except the sweet potato": declined, not forgotten
+    if ((h.start > 0 && NEGATION.has(mw[h.start - 1])) || (h.start > 1 && NEGATION.has(mw[h.start - 2])) || (h.end - h.start === 1 && h.start > 0 && ["thats", "its", "is", "was"].includes(mw[h.start - 1]))) continue; // "no wraps", "except the sweet potato": declined, not forgotten; "thats everything" is done, not the Everything
     // a count word right before the mention ("2 large pepperoni pizzas") travels with it
     let qty = 1;
     for (let k = h.start - 1; k >= Math.max(0, h.start - 2); k--) {

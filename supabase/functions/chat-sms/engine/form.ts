@@ -185,10 +185,10 @@ export function apply(input: OrderForm, moves: Move[], lineSpanMatcher: LineMatc
   const resolveRef = (ref: LineRef): number[] => {
     const live = form.lines;
     if ("line_id" in ref) return live.some((l) => l.line_id === ref.line_id) ? [ref.line_id] : [];
-    if ("ordinal" in ref) { const l = live[ref.ordinal - 1]; return l ? [l.line_id] : []; }
+    const shown = live.filter((l) => l.item_id !== null); if ("ordinal" in ref) { const l = shown[ref.ordinal - 1]; return l ? [l.line_id] : []; } // numbered as the order summary numbers them: priced lines only (a pending line shifted "remove item 2" onto the mussels, Vito's 10-10)
     if ("last" in ref) return live.length === 1 ? [live[0].line_id] : (live.length ? [live[live.length - 1].line_id] : []);
     const digit = refDigit(ref.span);
-    if (digit !== null) { const i = digit - 1, pick = form.open?.kind === "line_ref" ? form.open.candidates[i] : live[i]?.line_id; return pick !== undefined && live.some((l) => l.line_id === pick) ? [pick] : []; } // "cancel the first one" against the list we just showed
+    if (digit !== null) { const i = digit - 1, pick = form.open?.kind === "line_ref" ? form.open.candidates[i] : shown[i]?.line_id; return pick !== undefined && live.some((l) => l.line_id === pick) ? [pick] : []; } // "cancel the first one" against the list we just showed
     const overlap = live.filter((l) => lineSpanMatcher(l, ref.span)), named = overlap.filter((l) => lineSpanMatcher.named?.(l, ref.span));
     const hitLines = named.length > 0 ? named : overlap; // "cheesesteak salad" names the salad line; it only overlaps the pending "cheesesteak" line
     const hits = hitLines.map((l) => l.line_id);

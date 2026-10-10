@@ -58,7 +58,7 @@ export function closedAnswer(form: OrderForm, message: string, menu: Menu): Move
   const open = form.open;
 
   if (CANCEL.has(n)) return [{ kind: "control", what: n.includes("cancel") ? "cancel" : "start_over" }]; if (CART.has(n)) return [{ kind: "control", what: "show_cart" }];
-  if (HUMAN.has(n)) return [{ kind: "control", what: "human" }]; if (MENU.has(n)) return [{ kind: "ask_menu", about_span: null }];
+  if (HUMAN.has(n)) return [{ kind: "control", what: "human" }]; if (MENU.has(n) || (form.open && "line_id" in form.open && words(n).includes("options"))) return [{ kind: "ask_menu", about_span: null }]; // "lemme get the options" while a choice is open: that choice's list
   if (HELLO.has(n) && form.lines.length === 0 && !open) return [{ kind: "control", what: "greeting" }];
 
   if (PICKUP.has(n) || DELIVERY.has(n)) return [{ kind: "answer", field: "fulfillment", value: PICKUP.has(n) ? "pickup" : "delivery" }];
