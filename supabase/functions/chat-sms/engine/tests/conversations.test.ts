@@ -1772,3 +1772,16 @@ Deno.test("FNA 10-10: an hours question is answered from the shop's hours, and n
   const h = turn({ form: f, menu: { ...menu, shop: { ...menu.shop, phone_display: null } }, message: "can you just call me", moves: [{ kind: "control", what: "human" }] });
   assert(!h.reply.includes("follow up"), h.reply);
 });
+
+Deno.test("Vito's 10-10: the toppings offer takes the ways people say 'as is' (it looped six times on these)", () => {
+  const steak = steakFixtureMenu();
+  const say2 = (form: OrderForm, message: string, moves: Move[] = []) => { const closed = closedAnswer(form, message, steak); return turn({ form, menu: steak, message, moves: closed ?? moves, closed: closed !== null }); };
+  for (const answer of ["yeah just keep it how it comes", "that sounds good. just keep it like that", "no extra toppings", "sounds good as is", "yes thats perfect. im good with that"]) {
+    let f = newForm("vitos", "steak-v1"); f.fulfillment = "pickup";
+    let o = say2(f, "a cheesesteak sandwich", [{ kind: "add_line", item_span: "cheesesteak sandwich", qty: 1, option_spans: [] }]); f = o.form;
+    o = say2(f, "provolone", [{ kind: "answer_option", value_span: "provolone" }]); f = o.form;
+    o = say2(f, answer, [{ kind: "answer_option", value_span: answer }]); f = o.form;
+    assertEquals(f.lines[0].status.kind, "complete", answer + " => " + o.reply);
+    assertEquals(f.lines[0].modifiers.length, 0, answer);
+  }
+});
