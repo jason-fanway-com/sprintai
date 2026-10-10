@@ -24,20 +24,20 @@ export function fold(line: string): string {
   return out.join("\r\n");
 }
 
-export function buildVcard(shop: { name: string; phone: string; url?: string | null }, photoB64: string | null): string {
+export function buildVcard(shop: { name: string; phone: string; url?: string | null }, photoB64: string | null, v21 = false): string {
   const lines = [
     "BEGIN:VCARD",
-    "VERSION:3.0",
+    v21 ? "VERSION:2.1" : "VERSION:3.0",
     `N:;${esc(shop.name)};;;`,
     `FN:${esc(shop.name)}`,
     `ORG:${esc(shop.name)}`,
     `TEL;TYPE=CELL,VOICE,PREF:${shop.phone}`,
     ...(shop.url ? [`URL:${shop.url}`] : []),
     `NOTE:${esc("Text this number to order.")}`,
-    ...(photoB64 ? [`PHOTO;ENCODING=b;TYPE=JPEG:${photoB64}`] : []),
+    ...(photoB64 ? [v21 ? `PHOTO;JPEG;ENCODING=BASE64:${photoB64}` : `PHOTO;ENCODING=b;TYPE=JPEG:${photoB64}`] : []),
     "END:VCARD",
   ];
-  return lines.map(fold).join("\r\n") + "\r\n";
+  return lines.map(fold).join("\r\n").replace(/(PHOTO;JPEG;ENCODING=BASE64:[\s\S]*?)(\r\nEND:VCARD)/, "$1\r\n$2") + "\r\n"; // 2.1: a blank line ends the base64 block
 }
 
 function b64(bytes: Uint8Array): string {
@@ -61,7 +61,7 @@ if (import.meta.main) Deno.serve(async (req: Request) => {
     if (data && data.size <= 60_000) photo = b64(new Uint8Array(await data.arrayBuffer())); // a carrier caps the whole MMS; a contact photo is a thumbnail
   }
   const name = (shop.display_name ?? shop.name) as string;
-  const body = buildVcard({ name, phone: shop.phone_number_e164 as string, url: shop.website_url as string | null }, photo);
+  const body = buildVcard({ name, phone: shop.phone_number_e164 as string, url: shop.website_url as string | null }, photo, new URL(req.url).searchParams.get("v") === "21");
   const file = name.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "") || "shop";
   return new Response(req.method === "HEAD" ? null : body, {
     status: 200,
